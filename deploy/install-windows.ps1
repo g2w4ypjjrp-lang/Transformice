@@ -149,7 +149,7 @@ $g = Get-Content $gradleFile -Raw
 $g = $g.Replace('JavaLanguageVersion.of(22)', 'JavaLanguageVersion.of(25)')
 $g = $g.Replace("id 'java-library'", "id 'java-library'`n    id 'maven-publish'")
 $g += "`npublishing { publications { maven(MavenPublication) { groupId = 'com.github.NoFileFound'; artifactId = 'PSFramework'; version = '1.0.2'; from components.java } } }`n"
-Set-Content -Path $gradleFile -Value $g -Encoding UTF8
+[IO.File]::WriteAllText($gradleFile, $g, (New-Object Text.UTF8Encoding($false)))  # no BOM: Gradle rejects it
 Use-LocalGradle $psDir
 Push-Location $psDir
 try { Invoke-Native { & .\gradlew.bat -q --no-daemon publishToMavenLocal } 'Building PSFramework' } finally { Pop-Location }
