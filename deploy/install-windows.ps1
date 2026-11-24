@@ -3,6 +3,9 @@
 #   powershell -ExecutionPolicy Bypass -File install-windows.ps1
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# Some VDS networks have broken IPv6; make Java (Gradle, Maven downloads) use IPv4.
+$env:JAVA_TOOL_OPTIONS = '-Djava.net.preferIPv4Stack=true'
 
 $App        = 'transformice.canarslan'
 $AppDir     = "C:\$App"
@@ -29,6 +32,35 @@ function Winget-Install($id) {
 function Invoke-Native([scriptblock]$cmd, [string]$what) {
     & $cmd
     if ($LASTEXITCODE -ne 0) { throw "$what failed (exit code $LASTEXITCODE)" }
+}
+
+function Use-LocalGradle([string]$projectDir) {
+    # Downloads the Gradle distribution with PowerShell (with retries) and points the wrapper at the local file,
+    # so the build does not depend on Java's own HTTPS download (which can time out on some VDS networks).
+    $props = Join-Path $projectDir 'gradle\wrapper\gradle-wrapper.properties'
+    $text = Get-Content $props -Raw
+    if ($text -notmatch '(?m)^distributionUrl=(.+)$') { throw "distributionUrl not found in $props" }
+    $url = $Matches[1].Trim().Replace('\:', ':')
+    if ($url -like 'file:*') { return }
+    $cache = "$AppDir\cache"
+    New-Item -ItemType Directory -Force -Path $cache | Out-Null
+    $zip = Join-Path $cache ([IO.Path]::GetFileName($url))
+    if (-not (Test-Path $zip)) {
+        for ($i = 1; $i -le 4; $i++) {
+            try {
+                Write-Host "    downloading $url (attempt $i)"
+                Invoke-WebRequest -Uri $url -OutFile "$zip.part" -UseBasicParsing -TimeoutSec 600
+                Move-Item "$zip.part" $zip -Force
+                break
+            } catch {
+                if ($i -eq 4) { throw "Could not download $url : $_" }
+                Start-Sleep -Seconds (5 * $i)
+            }
+        }
+    }
+    $local = 'file:///' + ($zip -replace '\\', '/')
+    $text = $text -replace '(?m)^distributionUrl=.+$', ("distributionUrl=" + $local.Replace(':', '\:'))
+    Set-Content -Path $props -Value $text -Encoding ASCII
 }
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -118,10 +150,12 @@ $g = $g.Replace('JavaLanguageVersion.of(22)', 'JavaLanguageVersion.of(25)')
 $g = $g.Replace("id 'java-library'", "id 'java-library'`n    id 'maven-publish'")
 $g += "`npublishing { publications { maven(MavenPublication) { groupId = 'com.github.NoFileFound'; artifactId = 'PSFramework'; version = '1.0.2'; from components.java } } }`n"
 Set-Content -Path $gradleFile -Value $g -Encoding UTF8
+Use-LocalGradle $psDir
 Push-Location $psDir
 try { Invoke-Native { & .\gradlew.bat -q --no-daemon publishToMavenLocal } 'Building PSFramework' } finally { Pop-Location }
 
 Step '6/8 Building the game server'
+Use-LocalGradle $SrcDir
 Push-Location $SrcDir
 try { Invoke-Native { & .\gradlew.bat -q --no-daemon shadowJar } 'Building the server' } finally { Pop-Location }
 $jar = Get-ChildItem "$SrcDir\build\libs" -Filter 'Transformice-*.jar' | Select-Object -First 1
