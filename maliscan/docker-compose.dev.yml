@@ -1,0 +1,21 @@
+# Local development database (PostgreSQL 16, same major as Supabase).
+# Usage:
+#   docker compose -f docker-compose.dev.yml up -d
+#   cd backend && DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/maliscan \
+#     python -m app.db.migrate --with-shim
+services:
+  db:
+    image: postgres:16.4
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: maliscan
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - maliscan-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 10
+volumes:
+  maliscan-db:
