@@ -1,0 +1,30 @@
+[
+  {
+    "severity": "error",
+    "code": "UNBALANCED",
+    "message": "debit 100.00 ≠ credit 99.00",
+    "source_id": "00000000-0000-0000-0000-000000000385",
+    "line_no": null
+  },
+  {
+    "severity": "error",
+    "code": "DUPLICATE_CONTENT",
+    "message": "same date, document number and lines as voucher 005a3b1e-0000-0000-0000-000000000004",
+    "source_id": "00000000-0000-0000-0000-000000000387",
+    "line_no": null
+  },
+  {
+    "severity": "error",
+    "code": "ACCOUNT_NOT_IN_CHART",
+    "message": "account 770.99 is not in the taxpayer's chart (Luca rejects unknown codes: 'hesap kodu bulunamadı')",
+    "source_id": "00000000-0000-0000-0000-000000000388",
+    "line_no": 1
+  },
+  {
+    "severity": "warning",
+    "code": "TEMPLATE_UNVERIFIED",
+    "message": "template reconstructed from Luca support documentation; not yet confirmed against the official 'Şablon İndir' file or a real Luca import",
+    "source_id": null,
+    "line_no": null
+  }
+]

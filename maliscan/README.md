@@ -5,7 +5,9 @@ live camera scanning of receipts and invoices → OCR / e-document parsing →
 AI-assisted classification → deterministic journal generation → human
 approval → Luca-compatible Excel export.
 
-> **Status: Milestone 1 (Foundation) complete.** See
+> **Status: Milestone 1 (Foundation) complete; Luca export module implemented
+> but UNVERIFIED against a real Luca import** (see
+> [docs/LUCA_INTEGRATION.md](docs/LUCA_INTEGRATION.md)). See
 > [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for the
 > architecture and milestone roadmap. Not yet usable end-to-end.
 
@@ -23,7 +25,8 @@ maliscan/
 ├── database/
 │   ├── migrations/         ordered SQL migrations (Supabase compatible)
 │   └── bootstrap/          local-only Supabase auth shim for dev/CI
-├── docs/                   plan, API reference
+├── samples/luca/           synthetic Luca pilot validation pack
+├── docs/                   plan, API reference, Luca research report
 ├── docker-compose.dev.yml  local PostgreSQL
 └── .env.example
 ```
