@@ -178,7 +178,7 @@ public final class GameServer extends PSGameServer {
             this.geoIP = new PSGeoIP(Path.of("./config/GeoIP.dat"));
             this.logger.debug("[GeoIP] GeoIP Loaded successfully.");
             this.database.connect();
-            this.logger.info(String.format("[Database] Successfully connected at the database: %s", this.database.getConnectionUrl()));
+            this.logger.info(String.format("[Database] Successfully connected at the database: %s", this.database.getConnectionUrl().replaceAll("//[^@/]*@", "//***@")));
             this.databaseManager = GameDatabaseManagerFactory.create(this.database, this.tfmConfig.getIsDebug());
             this.databaseManager.initialize();
             this.logger.info("[Database] Main Database initialized.");

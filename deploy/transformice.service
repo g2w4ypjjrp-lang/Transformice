@@ -1,0 +1,22 @@
+[Unit]
+Description=Transformice private server (transformice.canarslan)
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=tfm
+Group=tfm
+WorkingDirectory=/opt/transformice.canarslan
+EnvironmentFile=/etc/transformice.canarslan/server.env
+ExecStart=/usr/bin/java --enable-native-access=ALL-UNNAMED -Xms256m -Xmx1g -jar /opt/transformice.canarslan/Transformice.jar
+Restart=on-failure
+RestartSec=5
+StandardInput=null
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

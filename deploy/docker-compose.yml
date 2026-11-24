@@ -1,0 +1,15 @@
+# MongoDB for the Transformice server. Bound to localhost only; never expose 27017 publicly.
+services:
+  mongo:
+    image: mongo:7
+    container_name: tfm-mongo
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27017:27017"
+    env_file:
+      - /etc/transformice.canarslan/mongo.env
+    volumes:
+      - tfm-mongo-data:/data/db
+      - ./mongo-init.sh:/docker-entrypoint-initdb.d/mongo-init.sh:ro
+volumes:
+  tfm-mongo-data:
