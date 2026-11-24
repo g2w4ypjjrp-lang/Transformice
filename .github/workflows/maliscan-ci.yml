@@ -1,0 +1,42 @@
+name: MaliScan CI
+on:
+  push:
+    paths: ["maliscan/**", ".github/workflows/maliscan-ci.yml"]
+  pull_request:
+    paths: ["maliscan/**"]
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    defaults: { run: { working-directory: maliscan/backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: sudo apt-get install -y fonts-dejavu-core
+      - run: pip install -r requirements-dev.txt
+      - run: pytest
+        env: { TEST_DATABASE_ADMIN_URL: "postgresql://postgres:postgres@localhost:5432/postgres" }
+  web:
+    runs-on: ubuntu-24.04
+    defaults: { run: { working-directory: maliscan/web } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm, cache-dependency-path: maliscan/web/package-lock.json }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: https://api.example.com
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-public-anon

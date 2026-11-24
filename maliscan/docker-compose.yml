@@ -1,0 +1,117 @@
+# MaliScan AI — production stack for a single VPS.
+#
+#   cp .env.example .env   # fill in real values
+#   docker compose build
+#   docker compose run --rm migrate
+#   docker compose up -d
+#
+# Database: Supabase Postgres (recommended, managed backups) via DATABASE_URL,
+# or the bundled PostgreSQL with `--profile selfhosted-db`.
+# See docs/DEPLOYMENT.md.
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  image: maliscan-backend:latest
+  env_file: .env
+  environment:
+    ENVIRONMENT: production
+    LOCAL_STORAGE_DIR: /data/storage
+  volumes:
+    - storage:/data/storage
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  migrate:
+    <<: *backend
+    command: ["python", "-m", "app.db.migrate"]
+    restart: "no"
+    profiles: ["tools"]
+
+  api:
+    <<: *backend
+    expose: ["8000"]
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.worker.main"]
+    healthcheck: { disable: true }
+    deploy:
+      replicas: 2
+
+  maintenance:
+    <<: *backend
+    # Daily retention run (dry-run unless RETENTION_EXECUTE=1).
+    command: ["sh", "-c", "while true; do python -m app.maintenance $${RETENTION_EXECUTE:+--execute}; sleep 86400; done"]
+    healthcheck: { disable: true }
+
+  web:
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    image: maliscan-web:latest
+    expose: ["3000"]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./deploy/nginx/maliscan.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - certbot-www:/var/www/certbot:ro
+      - letsencrypt:/etc/letsencrypt:ro
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
+    depends_on: [api, web]
+    restart: unless-stopped
+
+  certbot:
+    image: certbot/certbot:v3.0.1
+    volumes:
+      - certbot-www:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+    entrypoint: ["sh", "-c", "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"]
+    restart: unless-stopped
+
+  backup:
+    image: postgres:16-alpine
+    env_file: .env
+    volumes:
+      - ./deploy/scripts:/scripts:ro
+      - storage:/data/storage:ro
+      - backups:/backups
+    entrypoint: ["sh", "-c", "apk add --no-cache openssl >/dev/null && while true; do sh /scripts/backup.sh; sleep 86400; done"]
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    profiles: ["selfhosted-db"]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}  # required when using --profile selfhosted-db
+      POSTGRES_DB: maliscan
+    volumes: [pgdata:/var/lib/postgresql/data]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+
+volumes:
+  storage:
+  backups:
+  pgdata:
+  certbot-www:
+  letsencrypt:

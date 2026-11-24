@@ -77,6 +77,7 @@ Each milestone ends with: tests run, report, known issues, remaining tasks,
 
 | # | Milestone | Content |
 |---|---|---|
+| | **Status (2026-11-24)** | **All milestones implemented and tested. Open: real Luca import verification, real Claude accuracy measurement, KVKK contracts — see README.** |
 | **M1** | Foundation | Plan, DB schema + migrations, RLS, Supabase shim, FastAPI skeleton, JWT auth, tenant-scoped sessions, firm bootstrap, `/me`, audit log, migration runner, DB + API tests. |
 | M2 | Offices, members, taxpayers | Invitations, role management, taxpayers CRUD, VKN/TCKN validation, chart of accounts import (Tek Düzen Hesap Planı seed), account mappings, accounting rules CRUD, subscription limits enforcement. |
 | M3 | Documents & storage | Upload API (type/size/magic-byte validation), Supabase Storage + signed URLs, SHA-256 dedupe, job queue + worker, UBL-TR XML parser, PDF text extraction. |
