@@ -64,6 +64,8 @@ $text = $text -replace "`r`n", "`n"
 [IO.File]::WriteAllText($Caddyfile, $text, $utf8)
 
 Step '4/5 Validating and reloading Caddy (no downtime for the other sites)'
+# Caddy writes normal log lines to stderr; Windows PowerShell 5.1 would treat them as errors under 'Stop'.
+$ErrorActionPreference = 'Continue'
 & $Caddy validate --config $Caddyfile --adapter caddyfile *> "$env:TEMP\caddy-validate.log"
 if ($LASTEXITCODE -ne 0) {
     Copy-Item $backup $Caddyfile -Force
@@ -76,6 +78,7 @@ if ($LASTEXITCODE -ne 0) {
     Get-Content "$env:TEMP\caddy-reload.log" -Tail 15
     throw 'Caddy could not reload the configuration. The original file was restored; the running config is unchanged.'
 }
+$ErrorActionPreference = 'Stop'
 Write-Host '    Caddy reloaded'
 
 Step '5/5 Turning IIS off (it must not take port 80 from Caddy after a reboot)'
