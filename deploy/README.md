@@ -19,7 +19,20 @@ Script şunları yapar:
 6. Servisi `transformice.canarslan` adıyla systemd'ye ekler. Servis ayrıcalıksız `tfm` kullanıcısıyla çalışır.
 7. Güvenlik duvarında (ufw) yalnızca SSH ve oyun portlarını açar: 11801, 12801, 13801 ve 14801.
 
-## Yönetim
+## Windows kurulumu (Windows 11 / Windows Server)
+
+PowerShell'i **Yönetici olarak** açın ve şunu çalıştırın:
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/g2w4ypjjrp-lang/Transformice/local-build-setup/deploy/install-windows.ps1 -OutFile $env:TEMP\tfm-install.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\tfm-install.ps1
+```
+
+Betik winget ile Git, Java 25, MongoDB ve mongosh'u kurar. MongoDB'de kimlik doğrulamayı açar ve veritabanı yalnızca 127.0.0.1'i dinler. Şifreleri `C:\ProgramData\transformice.canarslan\` klasöründe tutar. Sunucuyu derleyip `C:\transformice.canarslan\` klasörüne kurar ve açılışta `LOCAL SERVICE` hesabıyla otomatik başlatır. Güvenlik duvarında yalnızca oyun portlarını açar.
+
+- Günlük: `Get-Content C:\transformice.canarslan\logs\console.log -Tail 30 -Wait`
+- Yeniden başlatma: `Stop-ScheduledTask transformice.canarslan; Start-ScheduledTask transformice.canarslan`
+
+## Yönetim (Linux)
 
 ```bash
 sudo systemctl status transformice.canarslan
