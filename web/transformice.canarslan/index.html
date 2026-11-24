@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Canarslan Fare Sunucusu</title>
+<meta name="description" content="Canarslan topluluk oyun sunucusu – test aşamasında.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M8 46 L56 46 L56 22 Z' fill='%23f4b942'/%3E%3Ccircle cx='40' cy='36' r='4' fill='%23d18f12'/%3E%3Ccircle cx='48' cy='40' r='2.5' fill='%23d18f12'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #fbf7ef; --surface: #ffffff; --text: #23201a; --muted: #6b6457;
+    --accent: #e0a526; --accent-strong: #b9800c; --line: #ece4d4; --ok: #2f8f5b; --warn: #b9800c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16140f; --surface: #201d17; --text: #f1ece2; --muted: #a79f90;
+      --accent: #f4b942; --accent-strong: #f4b942; --line: #322d24; --ok: #5cc48a; --warn: #f4b942;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16140f; --surface: #201d17; --text: #f1ece2; --muted: #a79f90;
+    --accent: #f4b942; --accent-strong: #f4b942; --line: #322d24; --ok: #5cc48a; --warn: #f4b942;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 16px; }
+  header { border-bottom: 1px solid var(--line); }
+  header .wrap { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .2px; }
+  nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 15px; }
+  nav a:hover { color: var(--text); }
+  .hero { padding: 64px 0 48px; display: grid; grid-template-columns: 1.3fr 1fr; gap: 32px; align-items: center; }
+  .hero h1 { font-size: clamp(32px, 5vw, 48px); line-height: 1.1; margin: 0 0 16px; }
+  .hero p { color: var(--muted); font-size: 18px; margin: 0 0 24px; }
+  .badge { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 14px; color: var(--muted); margin-bottom: 18px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+  .btn { display: inline-block; padding: 12px 20px; border-radius: 10px; background: var(--accent); color: #23201a; font-weight: 600; text-decoration: none; }
+  .btn:hover { filter: brightness(1.05); }
+  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); margin-left: 8px; }
+  section { padding: 40px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 24px; margin: 0 0 20px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .info { display: grid; grid-template-columns: max-content 1fr; gap: 10px 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+  .info dt { color: var(--muted); }
+  .info dd { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+  .status { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { font-size: 14px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); }
+  .chip.ok::before { content: "● "; color: var(--ok); }
+  .chip.todo::before { content: "○ "; color: var(--warn); }
+  ol.rules { margin: 0; padding-left: 20px; }
+  ol.rules li { margin-bottom: 8px; }
+  details { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin-bottom: 10px; }
+  summary { cursor: pointer; font-weight: 600; }
+  details p { color: var(--muted); margin: 10px 0 0; }
+  footer { border-top: 1px solid var(--line); padding: 28px 0 40px; color: var(--muted); font-size: 14px; }
+  .theme-toggle { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 8px; padding: 4px 10px; cursor: pointer; margin-left: 18px; font: inherit; font-size: 14px; }
+  @media (max-width: 760px) {
+    .hero { grid-template-columns: 1fr; padding: 40px 0 32px; }
+    .hero svg { max-width: 260px; margin: 0 auto; }
+    .grid { grid-template-columns: 1fr; }
+    nav a { display: none; }
+    nav { flex-shrink: 0; }
+    .btn.ghost { margin-left: 0; margin-top: 8px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="brand">
+      <svg width="28" height="28" viewBox="0 0 64 64" aria-hidden="true"><path d="M8 46 L56 46 L56 22 Z" fill="var(--accent)"/><circle cx="40" cy="36" r="4" fill="var(--accent-strong)" opacity=".6"/><circle cx="48" cy="40" r="2.5" fill="var(--accent-strong)" opacity=".6"/></svg>
+      Canarslan Fare Sunucusu
+    </div>
+    <nav>
+      <a href="#ozellikler">Özellikler</a>
+      <a href="#baglanti">Bağlantı</a>
+      <a href="#kurallar">Kurallar</a>
+      <a href="#sss">SSS</a>
+      <button class="theme-toggle" id="theme" type="button" aria-label="Tema değiştir">Tema</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="hero">
+    <div>
+      <span class="badge"><span class="dot"></span>Test aşamasında</span>
+      <h1>Fareler, peynir ve bolca kaos.</h1>
+      <p>Canarslan topluluğunun çok oyunculu fare platform oyunu sunucusu. Şu an kapalı test aşamasındayız; temel oyun sistemleri çalışıyor, yenileri sırayla ekleniyor.</p>
+      <a class="btn" href="#baglanti">Sunucu bilgileri</a>
+      <a class="btn ghost" href="#kurallar">Kurallar</a>
+    </div>
+    <!-- Original illustration: a round mouse chasing a cheese wedge -->
+    <svg viewBox="0 0 320 220" role="img" aria-label="Peynire koşan fare çizimi">
+      <ellipse cx="160" cy="196" rx="140" ry="10" fill="var(--line)"/>
+      <g>
+        <path d="M206 190 L300 190 L300 128 Z" fill="var(--accent)"/>
+        <circle cx="266" cy="168" r="8" fill="var(--accent-strong)" opacity=".5"/>
+        <circle cx="285" cy="176" r="5" fill="var(--accent-strong)" opacity=".5"/>
+        <circle cx="282" cy="150" r="4" fill="var(--accent-strong)" opacity=".5"/>
+      </g>
+      <g>
+        <path d="M40 160 C 10 150, 8 120, 30 112" stroke="var(--muted)" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <ellipse cx="100" cy="150" rx="62" ry="42" fill="#9a8f80"/>
+        <circle cx="150" cy="120" r="34" fill="#a89d8e"/>
+        <circle cx="136" cy="86" r="16" fill="#a89d8e"/><circle cx="136" cy="86" r="9" fill="#e8b4b0"/>
+        <circle cx="166" cy="88" r="14" fill="#a89d8e"/><circle cx="166" cy="88" r="8" fill="#e8b4b0"/>
+        <circle cx="160" cy="116" r="5" fill="#23201a"/><circle cx="162" cy="114" r="1.6" fill="#fff"/>
+        <circle cx="183" cy="128" r="5" fill="#e88f88"/>
+        <path d="M178 132 L204 128 M178 136 L204 138" stroke="var(--muted)" stroke-width="2" stroke-linecap="round"/>
+        <ellipse cx="80" cy="190" rx="14" ry="6" fill="#8a7f70"/>
+        <ellipse cx="124" cy="190" rx="14" ry="6" fill="#8a7f70"/>
+      </g>
+    </svg>
+  </div>
+
+  <section id="ozellikler">
+    <h2>Neler var?</h2>
+    <div class="grid">
+      <div class="card"><h3>Odalar</h3><p>Oda oluştur ya da var olana katıl; aynı odadaki herkes birbirini gerçek zamanlı görür.</p></div>
+      <div class="card"><h3>Peynir ve delik</h3><p>Peyniri kap, deliğe ilk sen ulaş. Herkes bitirince yeni tura geçilir.</p></div>
+      <div class="card"><h3>Şaman</h3><p>Her turda bir oyuncu şaman seçilir ve nesnelerle diğer farelere yol açar.</p></div>
+    </div>
+    <h3 style="margin:28px 0 12px;font-size:17px">Geliştirme durumu</h3>
+    <div class="status">
+      <span class="chip ok">Bağlantı ve giriş</span>
+      <span class="chip ok">Oda sistemi</span>
+      <span class="chip ok">Gerçek zamanlı hareket</span>
+      <span class="chip ok">Peynir ve delik</span>
+      <span class="chip ok">Şaman seçimi</span>
+      <span class="chip ok">Tur değişimi</span>
+      <span class="chip todo">Harita arşivi</span>
+      <span class="chip todo">Hile koruması</span>
+      <span class="chip todo">Kayıt ve istatistik testleri</span>
+      <span class="chip todo">Yönetim paneli</span>
+    </div>
+  </section>
+
+  <section id="baglanti">
+    <h2>Sunucu bilgileri</h2>
+    <dl class="info">
+      <dt>Adres</dt><dd>transformice.canarslan.net.tr</dd>
+      <dt>Portlar</dt><dd>11801 · 12801 · 13801 · 14801 (TCP)</dd>
+      <dt>Durum</dt><dd>Kapalı test</dd>
+    </dl>
+    <p style="color:var(--muted);margin-top:14px">Oyun istemcisi bu sitede dağıtılmaz. Test ekibine katılmak isteyenler yönetimle iletişime geçebilir.</p>
+  </section>
+
+  <section id="kurallar">
+    <h2>Kurallar</h2>
+    <ol class="rules">
+      <li>Herkese saygılı ol; hakaret, taciz ve ayrımcılık yasaktır.</li>
+      <li>Hile, bot ve hata (bug) istismarı yasaktır. Bulduğun hataları yönetime bildir.</li>
+      <li>Hesabını ve şifreni kimseyle paylaşma; yönetim asla şifreni sormaz.</li>
+      <li>Reklam ve spam yapma.</li>
+      <li>Yönetici kararlarına uy; itirazlarını sakin şekilde ilet.</li>
+    </ol>
+  </section>
+
+  <section id="sss">
+    <h2>Sık sorulan sorular</h2>
+    <details><summary>Ücretli mi?</summary><p>Hayır. Sunucu topluluk için ücretsiz bir test projesidir.</p></details>
+    <details><summary>İlerlemem silinir mi?</summary><p>Test aşamasında veritabanı sıfırlanabilir. Kalıcı sürüme geçildiğinde duyurulacak.</p></details>
+    <details><summary>Bir hata buldum, ne yapayım?</summary><p>Hatayı nasıl oluşturduğunu adım adım yazarak yönetime ilet.</p></details>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    © <span id="year">2026</span> Canarslan · canarslan.net.tr<br>
+    Bu sunucu bağımsız bir topluluk projesidir; Atelier 801 ile bir bağlantısı yoktur ve onun tarafından onaylanmamıştır. Transformice, Atelier 801'in ticari markasıdır.
+  </div>
+</footer>
+
+<script>
+  document.getElementById('year').textContent = new Date().getFullYear();
+  (function () {
+    var root = document.documentElement, key = 'tfm-theme';
+    try { var saved = localStorage.getItem(key); if (saved) root.setAttribute('data-theme', saved); } catch (e) {}
+    document.getElementById('theme').addEventListener('click', function () {
+      var dark = root.getAttribute('data-theme') === 'dark' ||
+        (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      var next = dark ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      try { localStorage.setItem(key, next); } catch (e) {}
+    });
+  })();
+</script>
+</body>
+</html>
