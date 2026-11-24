@@ -40,8 +40,23 @@ _DB_ERROR_MAP: list[tuple[type[Exception], int, str, str]] = [
 ]
 
 
+_MESSAGE_CODES = {
+    "plan_limit:max_taxpayers": (402, "plan_limit_exceeded", "taxpayer limit of the subscription plan reached"),
+    "plan_limit:max_users": (402, "plan_limit_exceeded", "user limit of the subscription plan reached"),
+    "plan_limit:max_documents_per_month": (402, "plan_limit_exceeded", "monthly document limit reached"),
+    "plan_limit:trial_expired": (402, "subscription_inactive", "trial period has ended"),
+    "plan_limit:no_active_subscription": (402, "subscription_inactive", "no active subscription"),
+    "invitation_invalid": (404, "invitation_invalid", "invitation is invalid, expired or already used"),
+    "invitation_email_mismatch": (403, "invitation_email_mismatch", "invitation was sent to a different email"),
+}
+
+
 def translate_db_error(exc: DBAPIError) -> ApiError | None:
     orig = exc.orig
+    primary = getattr(getattr(orig, "diag", None), "message_primary", None) or ""
+    if primary in _MESSAGE_CODES:
+        status, code, message = _MESSAGE_CODES[primary]
+        return ApiError(status, code, message)
     for klass, status, code, message in _DB_ERROR_MAP:
         if isinstance(orig, klass):
             return ApiError(status, code, message)

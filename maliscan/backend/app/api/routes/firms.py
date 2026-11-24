@@ -104,3 +104,26 @@ def list_audit_logs(
     ).mappings().all()
     return [AuditLogOut(**r) for r in rows]
 
+
+
+@router.get("/{firm_id}/usage", summary="Subscription usage against plan limits")
+def get_usage(firm_id: uuid.UUID, conn: DB) -> dict:
+    require_firm_role(conn, firm_id, ALL_ROLES)
+    row = conn.execute(
+        text("""SELECT
+                  (SELECT count(*) FROM public.firm_members WHERE firm_id = :f AND status = 'active') AS users,
+                  (SELECT count(*) FROM public.taxpayers WHERE firm_id = :f AND deleted_at IS NULL) AS taxpayers,
+                  (SELECT count(*) FROM public.documents WHERE firm_id = :f
+                      AND created_at >= date_trunc('month', now())) AS documents_this_month"""),
+        {"f": firm_id},
+    ).mappings().one()
+    sub = _subscription(conn, firm_id)
+    return {
+        "usage": dict(row),
+        "limits": {
+            "users": sub.max_users if sub else None,
+            "taxpayers": sub.max_taxpayers if sub else None,
+            "documents_per_month": sub.max_documents_per_month if sub else None,
+        },
+        "subscription": sub.model_dump() if sub else None,
+    }

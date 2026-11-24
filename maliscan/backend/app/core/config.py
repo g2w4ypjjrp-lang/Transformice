@@ -27,11 +27,43 @@ class Settings(BaseSettings):
     supabase_jwt_audience: str = "authenticated"
     supabase_jwt_issuer: str | None = None  # defaults to {supabase_url}/auth/v1 when url is set
 
+    # Public URL of the web app (invitation links, password reset redirects).
+    public_app_url: str = "http://localhost:3000"
+    # Public base URL of this API (used for local signed download URLs).
+    public_api_url: str = "http://localhost:8000"
+
+    # ---- File storage ---------------------------------------------------------
+    storage_backend: Literal["local", "supabase"] = "local"
+    local_storage_dir: str = "./var/storage"
+    # HMAC key for local signed URLs (required in staging/production with local storage).
+    signing_secret: SecretStr = SecretStr("dev-only-signing-secret-change-me-0123456789")
+    supabase_service_role_key: SecretStr | None = None
+    signed_url_ttl_seconds: int = 300
+    max_upload_bytes: int = 15 * 1024 * 1024
+
+    # ---- AI / OCR ---------------------------------------------------------------
+    anthropic_api_key: SecretStr | None = None
+    anthropic_model: str = "claude-opus-5-5"
+    anthropic_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    # none | google_vision  (Claude reads images directly; an OCR pre-pass is optional)
+    ocr_provider: Literal["none", "google_vision"] = "none"
+    google_vision_api_key: SecretStr | None = None
+    # Below this confidence a document is always flagged for careful review.
+    review_confidence_threshold: float = 0.85
+
+    # ---- Worker -------------------------------------------------------------------
+    worker_poll_seconds: float = 2.0
+    worker_id: str = "worker-1"
+
     @model_validator(mode="after")
     def _check_auth_config(self) -> "Settings":
         if self.environment in ("staging", "production"):
             if not self.supabase_jwt_secret and not self.supabase_url:
                 raise ValueError("SUPABASE_JWT_SECRET or SUPABASE_URL (JWKS) must be configured")
+            if self.signing_secret.get_secret_value().startswith("dev-only"):
+                raise ValueError("SIGNING_SECRET must be set in staging/production")
+            if self.storage_backend == "supabase" and not (self.supabase_url and self.supabase_service_role_key):
+                raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for supabase storage")
         return self
 
     @property
