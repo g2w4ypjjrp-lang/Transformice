@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import install_error_handlers
-from app.api.routes import firms, health, me, members, taxpayers
+from app.api.routes import admin, dashboard, documents, exports, files, firms, health, me, members, taxpayers
 from app.core.config import get_settings
 from app.core.logging import configure_logging, request_id_var
 
@@ -65,7 +65,7 @@ def create_app() -> FastAPI:
         return response
 
     install_error_handlers(app)
-    for module in (health, me, firms, members, taxpayers):
+    for module in (health, me, firms, members, taxpayers, documents, exports, dashboard, admin, files):
         app.include_router(module.router, prefix=settings.api_prefix)
     return app
 

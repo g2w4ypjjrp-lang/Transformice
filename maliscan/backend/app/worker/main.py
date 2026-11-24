@@ -1,0 +1,118 @@
+"""Background worker: PostgreSQL job queue with FOR UPDATE SKIP LOCKED.
+
+    python -m app.worker.main
+
+Several workers can run in parallel. Failed jobs are retried with exponential
+backoff (retryable errors only) and end as 'dead' after max_attempts. Jobs
+stuck in 'running' (crashed worker) are re-queued after 15 minutes.
+"""
+
+from __future__ import annotations
+
+import logging
+import signal
+import time
+import uuid
+from datetime import timedelta
+
+from sqlalchemy import Engine, text
+
+from app.core.config import Settings, get_settings
+from app.core.logging import configure_logging
+from app.db.session import get_engine, service_transaction
+from app.services.extraction.claude import ClaudeExtractor
+from app.services.pipeline import ProcessingError, build_journal, process_document
+from app.services.storage import Storage, get_storage
+
+log = logging.getLogger("maliscan.worker")
+STALE_AFTER = timedelta(minutes=15)
+
+
+def claim_job(engine: Engine, worker_id: str, firm_id: uuid.UUID | str | None = None) -> dict | None:
+    """Claim the next due job (optionally restricted to one firm, e.g. dedicated workers)."""
+    with service_transaction(engine) as conn:
+        conn.execute(text("""UPDATE public.processing_jobs SET status = 'queued', locked_by = NULL, locked_at = NULL
+                             WHERE status = 'running' AND locked_at < now() - make_interval(mins => 15)"""))
+        row = conn.execute(text("""
+            UPDATE public.processing_jobs SET status = 'running', attempts = attempts + 1,
+                   locked_by = :w, locked_at = now()
+             WHERE id = (SELECT id FROM public.processing_jobs
+                          WHERE status = 'queued' AND run_after <= now()
+                            AND (CAST(:firm AS uuid) IS NULL OR firm_id = :firm)
+                          ORDER BY priority, run_after
+                          FOR UPDATE SKIP LOCKED LIMIT 1)
+            RETURNING id, firm_id, document_id, job_type, attempts, max_attempts, payload"""),
+            {"w": worker_id, "firm": firm_id}).mappings().one_or_none()
+        return dict(row) if row else None
+
+
+def run_job(job: dict, *, engine: Engine, storage: Storage, settings: Settings,
+            claude: ClaudeExtractor | None = None) -> str:
+    """Execute one claimed job; returns final job status."""
+    firm_id, doc_id = job["firm_id"], job["document_id"]
+    try:
+        with service_transaction(engine) as conn:
+            if job["job_type"] == "extract_document":
+                conn.execute(text("UPDATE public.documents SET status = 'processing' WHERE firm_id = :f AND id = :d "
+                                  "AND status IN ('queued','uploaded','failed')"), {"f": firm_id, "d": doc_id})
+        if job["job_type"] not in ("extract_document", "generate_journal"):
+            raise ProcessingError("unknown_job_type", job["job_type"])
+        with service_transaction(engine) as conn:
+            if job["job_type"] == "extract_document":
+                process_document(conn, firm_id=firm_id, document_id=doc_id, storage=storage, settings=settings,
+                                 claude=claude)
+            else:
+                build_journal(conn, firm_id=firm_id, document_id=doc_id, created_by=None)
+                conn.execute(text("""UPDATE public.documents SET status = 'needs_review' WHERE firm_id = :f
+                                     AND id = :d AND status IN ('processing','queued')"""),
+                             {"f": firm_id, "d": doc_id})
+            conn.execute(text("""UPDATE public.processing_jobs SET status = 'succeeded', finished_at = now(),
+                                 last_error_code = NULL WHERE id = :j"""), {"j": job["id"]})
+        log.info("job succeeded", extra={"event": "job.succeeded", "firm_id": firm_id})
+        return "succeeded"
+    except Exception as exc:  # noqa: BLE001 — every failure must be recorded
+        code = exc.code if isinstance(exc, ProcessingError) else type(exc).__name__
+        retryable = exc.retryable if isinstance(exc, ProcessingError) else True
+        final = (not retryable) or job["attempts"] >= job["max_attempts"]
+        status = "dead" if final else "queued"
+        delay = 30 * (2 ** (job["attempts"] - 1))
+        with service_transaction(engine) as conn:
+            conn.execute(text("""UPDATE public.processing_jobs SET status = :s, last_error_code = :c,
+                                    locked_by = NULL, locked_at = NULL,
+                                    run_after = now() + make_interval(secs => :delay),
+                                    finished_at = CASE WHEN :final THEN now() END
+                                 WHERE id = :j"""),
+                         {"s": status, "c": code[:100], "delay": delay, "final": final, "j": job["id"]})
+            conn.execute(text("""UPDATE public.documents SET status = :st, error_code = :c
+                                 WHERE firm_id = :f AND id = :d AND status NOT IN ('approved','exported')"""),
+                         {"st": "failed" if final else "queued", "c": code[:100], "f": firm_id, "d": doc_id})
+        log.warning("job failed", extra={"event": "job.failed", "error_code": code, "firm_id": firm_id})
+        return status
+
+
+def main() -> None:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    engine, storage = get_engine(), get_storage()
+    worker_id = f"{settings.worker_id}-{uuid.uuid4().hex[:6]}"
+    stop = {"flag": False}
+    signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
+    signal.signal(signal.SIGINT, lambda *_: stop.update(flag=True))
+    log.info("worker started", extra={"event": "worker.started"})
+    while not stop["flag"]:
+        job = None
+        try:
+            job = claim_job(engine, worker_id)
+        except Exception:  # noqa: BLE001 — DB hiccup: back off
+            log.exception("claim failed")
+            time.sleep(5)
+            continue
+        if job is None:
+            time.sleep(settings.worker_poll_seconds)
+            continue
+        run_job(job, engine=engine, storage=storage, settings=settings)
+    log.info("worker stopped", extra={"event": "worker.stopped"})
+
+
+if __name__ == "__main__":
+    main()

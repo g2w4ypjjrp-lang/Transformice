@@ -10,6 +10,7 @@ created per test session and dropped afterwards.
 from __future__ import annotations
 
 import os
+import tempfile
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -38,7 +39,9 @@ os.environ.update(
         "DATABASE_URL": TEST_DB_URL.replace("postgresql://", "postgresql+psycopg://", 1),
         "SUPABASE_JWT_SECRET": JWT_SECRET,
         "LOG_LEVEL": "WARNING",
-        "DB_POOL_SIZE": "2",
+        "DB_POOL_SIZE": "4",
+        "LOCAL_STORAGE_DIR": tempfile.mkdtemp(prefix="maliscan-test-storage-"),
+        "PUBLIC_API_URL": "http://testserver",
     }
 )
 
@@ -179,3 +182,50 @@ def make_taxpayer(owner_conn):
         ).fetchone()[0]
 
     return _make
+
+
+class FakeAnthropic:
+    """Stands in for anthropic.Anthropic in tests; returns a canned structured-output response."""
+
+    def __init__(self, payload: dict | None = None, *, stop_reason: str = "end_turn", raises: Exception | None = None):
+        import json as _json
+        from types import SimpleNamespace
+
+        self.calls: list[dict] = []
+        outer = self
+
+        class _Messages:
+            def create(self, **kwargs):
+                outer.calls.append(kwargs)
+                if raises:
+                    raise raises
+                content = [SimpleNamespace(type="text", text=_json.dumps(payload))] if payload is not None else []
+                return SimpleNamespace(content=content, stop_reason=stop_reason, model=kwargs["model"],
+                                       usage=SimpleNamespace(input_tokens=1000, output_tokens=200))
+
+        self.beta = SimpleNamespace(messages=_Messages())
+
+
+def receipt_payload(**overrides) -> dict:
+    """A model response for the synthetic fuel receipt (amounts as strings, like the schema)."""
+    from app.services.samples_docs import SUPPLIER_VKN
+
+    base = {
+        "document_type": "thermal_receipt",
+        "supplier": {"name": "ÖRNEK AKARYAKIT LTD.ŞTİ.", "tax_number": SUPPLIER_VKN, "tax_office": "Kavaklıdere",
+                     "address": None},
+        "buyer": {"name": None, "tax_number": None, "tax_office": None, "address": None},
+        "document_number": "0042", "ettn": None, "document_date": "2026-11-03", "currency": "TRY",
+        "payment_method": "cash",
+        "lines": [{"description": "KURŞUNSUZ 95", "quantity": None, "unit": None, "unit_price": None,
+                   "discount_amount": None, "net_amount": None, "vat_rate": "20", "vat_amount": None,
+                   "total_amount": "1200.00", "withholding_code": None, "withholding_ratio": None,
+                   "withholding_amount": None}],
+        "vat_breakdown": [{"rate": "20", "base": "1000.00", "amount": "200.00"}],
+        "withholding": None, "total_net": None, "total_vat": "200.00", "total_amount": "1200.00", "notes": None,
+        "confidence": {"document_type": 0.98, "supplier_name": 0.95, "supplier_tax_number": 0.93,
+                       "document_number": 0.9, "document_date": 0.97, "vat_breakdown": 0.95, "total_amount": 0.99,
+                       "lines": 0.8, "payment_method": 0.95},
+    }
+    base.update(overrides)
+    return base
