@@ -58,6 +58,7 @@ await page.getByLabel("Unvan / ad soyad").fill("Deneme Mükellef Ltd. Şti.");
 await shot("02-new-taxpayer");
 await page.getByRole("button", { name: "Kaydet" }).click();
 await page.waitForURL(/\/taxpayers\/view/);
+const taxpayerUrl = page.url();
 await page.waitForSelector("text=Varsayılan hesaplar");
 await shot("03-taxpayer-settings");
 await page.getByRole("button", { name: /Hesap planı/ }).click();
@@ -70,9 +71,11 @@ await tpSelect.selectOption({ index: 1 });
 await page.getByRole("button", { name: "Kamerayı başlat" }).click();
 await page.waitForSelector("text=belge algılandı", { timeout: 20000 });
 await shot("04-scanner-detecting");
-await page.waitForSelector("text=Yüklendi — işleniyor", { timeout: 30000 });
-await shot("05-scanner-uploaded");
-step("live camera: detected, auto-captured, uploaded");
+const t0 = Date.now();
+await page.waitForSelector("text=Fiş okundu", { timeout: 60000 });  // read on the device → ✓
+await shot("05-scanner-read");
+await page.waitForSelector("text=Okundu ✓", { timeout: 10000 });
+step(`live camera: detected, auto-captured, read on device + processed (${Date.now() - t0} ms after detection)`);
 
 await page.goto(`${BASE}/documents`);
 await page.locator("tbody").getByText("İnceleme bekliyor").first().waitFor({ timeout: 30000 });
@@ -86,10 +89,20 @@ step("review screen with balanced draft journal");
 await page.getByRole("button", { name: "Belge verisi" }).click();
 await shot("08-review-data");
 await page.getByRole("button", { name: "Yevmiye kaydı" }).click();
+// type an account that is not in the chart: it is defined and learned on approval
+await page.getByLabel("Gider hesabı").fill("770.20");
+await page.waitForSelector("text=Yeni hesap — onaylayınca hesap planına eklenir");
 await page.getByRole("button", { name: /Onayla/ }).click();
 await page.waitForURL(/documents/);
 await page.waitForTimeout(800);
-step("approved");
+step("approved with new account 770.20");
+await page.goto(taxpayerUrl);
+await page.getByRole("button", { name: /Hesap planı/ }).click();
+await page.waitForSelector("text=770.20");
+await page.getByRole("button", { name: /Hesap eşleştirmeleri/ }).click();
+await page.locator("td", { hasText: "770.20" }).first().waitFor();
+await shot("08b-learned");
+step("770.20 added to chart and learned for the supplier");
 
 await page.goto(`${BASE}/exports`);
 await page.locator("select").filter({ hasText: "Seçin…" }).selectOption({ index: 1 });

@@ -374,3 +374,100 @@ def test_exported_documents_and_exports_can_be_deleted(client, office, engine):
                         json={"all_approved": True, "format": "fatura_listesi"})
     assert again.status_code == 200, again.text
     assert again.json()["voucher_count"] == 1
+
+
+def test_typed_account_is_defined_learned_and_applied_everywhere(client, office, engine):
+    f, tp = office["firm"], office["tp"]
+    docs = []
+    for t, no in ((2, "A-1"), (5, "A-2")):
+        docs.append(_upload(client, office, thermal_receipt_image(tilt=t)).json()["id"])
+        _work(engine, receipt_payload(document_number=no), firm=f)
+    first, pending = (f"/api/v1/firms/{f}/documents/{d}" for d in docs)
+    assert client.get(pending, headers=office["h"]).json()["journal"]["lines"][0]["account_code"] == "770.02"
+
+    # the accountant books the first receipt to 770.20, which is not in the chart yet
+    edit = {"entry_date": "2026-11-03", "lines": [
+        {"account_code": "770.20", "debit": "1000.00"}, {"account_code": "191.20", "debit": "200.00"},
+        {"account_code": "100.01", "credit": "1200.00"}]}
+    r = client.put(f"{first}/journal", headers=office["h"], json=edit)
+    assert r.status_code == 200, r.text
+    assert r.json()["created_accounts"] == ["770.20"]
+    assert r.json()["learned"]["account"] == "770.20" and r.json()["learned"]["rebooked"] == 1
+    chart = {a["code"]: a for a in client.get(f"/api/v1/firms/{f}/taxpayers/{tp}/accounts", headers=office["h"]).json()}
+    assert chart["770.20"]["is_postable"] and "Genel Yönetim" in chart["770.20"]["name"]
+    # the other receipt of the same supplier waiting for review was re-booked at once
+    assert client.get(pending, headers=office["h"]).json()["journal"]["lines"][0]["account_code"] == "770.20"
+    # and every new receipt of that supplier comes as 770.20
+    new = _upload(client, office, thermal_receipt_image(tilt=8)).json()["id"]
+    _work(engine, receipt_payload(document_number="A-3"), firm=f)
+    j = client.get(f"/api/v1/firms/{f}/documents/{new}", headers=office["h"]).json()["journal"]
+    assert j["lines"][0]["account_code"] == "770.20"
+
+    # a later correction overwrites the learned account (latest choice wins)
+    edit["lines"][0]["account_code"] = "770.21"
+    assert client.put(f"/api/v1/firms/{f}/documents/{new}/journal", headers=office["h"], json=edit).status_code == 200
+    maps = client.get(f"/api/v1/firms/{f}/taxpayers/{tp}/mappings", headers=office["h"]).json()
+    assert [m["account_code"] for m in maps if m["match_field"] == "supplier_tax_number"] == ["770.21"]
+    # group accounts are still refused
+    edit["lines"][0]["account_code"] = "770"
+    assert client.put(f"{first}/journal", headers=office["h"], json=edit).json()["error"]["code"] == "account_not_postable"
+
+
+def test_supplier_without_tax_number_is_learned_by_name(client, office, engine):
+    f = office["firm"]
+    ids = []
+    for t, no in ((3, "N-1"), (7, "N-2")):
+        ids.append(_upload(client, office, thermal_receipt_image(tilt=t)).json()["id"])
+        _work(engine, receipt_payload(document_number=no, supplier={"name": "KAPLAN KIRTASIYE VE BÜRO", "tax_number": None,
+                                                                     "tax_office": None, "address": None}), firm=f)
+    edit = {"entry_date": "2026-11-03", "lines": [
+        {"account_code": "770.03", "debit": "1000.00"}, {"account_code": "191.20", "debit": "200.00"},
+        {"account_code": "100.01", "credit": "1200.00"}]}
+    r = client.put(f"/api/v1/firms/{f}/documents/{ids[0]}/journal", headers=office["h"], json=edit)
+    assert r.json()["learned"] == {"account": "770.03", "match_field": "supplier_name", "rebooked": 1}
+    j = client.get(f"/api/v1/firms/{f}/documents/{ids[1]}", headers=office["h"]).json()["journal"]
+    assert j["lines"][0]["account_code"] == "770.03"
+
+
+def test_text_read_on_phone_is_processed_instantly(client, office, engine):
+    """Free mode: the phone sends its OCR text with the photo; complete receipts are ready in the
+    upload response (no server OCR job), partial ones are shown at once and improved by the server."""
+    from tests.test_receipt_parser import OCR_MARKET, OCR_REAL_PHOTO_PSM6
+
+    f = office["firm"]
+    url = f"/api/v1/firms/{f}/taxpayers/{office['tp']}/documents"
+    r = client.post(url, headers=office["h"], files={"file": ("a.jpg", thermal_receipt_image(tilt=2), "image/jpeg")},
+                    data={"source": "camera", "ocr_text": OCR_MARKET})
+    assert r.status_code == 201, r.text
+    doc = r.json()
+    assert doc["status"] == "needs_review" and doc["total_amount"] == "272.50"
+    detail = client.get(f"/api/v1/firms/{f}/documents/{doc['id']}", headers=office["h"]).json()
+    assert detail["journal"]["status"] == "draft" and detail["extraction"]["source"] == "ocr_rules"
+    with engine.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM processing_jobs WHERE document_id = :d"),
+                         {"d": doc["id"]}).scalar() == 0
+
+    # clerk upload: extraction now, journal by a quick background job
+    r = client.post(url, headers=office["clerk"], files={"file": ("b.jpg", thermal_receipt_image(tilt=4), "image/jpeg")},
+                    data={"source": "camera", "ocr_text": OCR_MARKET.replace("FİŞ NO: 1187", "FİŞ NO: 1188")})
+    assert r.json()["status"] == "needs_review"
+    assert _work(engine, firm=f) == ["succeeded"]
+    assert client.get(f"/api/v1/firms/{f}/documents/{r.json()['id']}", headers=office["h"]).json()["journal"]
+
+    # partial text (no date) → saved at once, server OCR job still queued to improve it
+    r = client.post(url, headers=office["h"], files={"file": ("c.jpg", thermal_receipt_image(tilt=6), "image/jpeg")},
+                    data={"source": "camera", "ocr_text": OCR_REAL_PHOTO_PSM6})
+    assert r.json()["status"] == "queued" and r.json()["total_amount"] == "5750.00"
+
+
+def test_bulk_approve_accepts_complete_free_ocr_receipts(client, office, engine):
+    from tests.test_receipt_parser import OCR_MARKET, OCR_TILTED_SHIFTED
+
+    f = office["firm"]
+    url = f"/api/v1/firms/{f}/taxpayers/{office['tp']}/documents"
+    ids = [client.post(url, headers=office["h"], files={"file": (f"{i}.jpg", thermal_receipt_image(tilt=i), "image/jpeg")},
+                       data={"source": "camera", "ocr_text": t}).json()["id"]
+           for i, t in ((2, OCR_MARKET), (5, OCR_TILTED_SHIFTED))]
+    r = client.post(f"/api/v1/firms/{f}/documents/bulk-approve", headers=office["h"], json={"document_ids": ids})
+    assert r.status_code == 200, r.text
+    assert sorted(r.json()["approved"]) == sorted(ids), r.json()

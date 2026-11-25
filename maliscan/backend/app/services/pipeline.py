@@ -54,7 +54,8 @@ def _embedded_ubl(pdf: bytes) -> bytes | None:
 
 
 def extract(content: bytes, mime_type: str, file_kind: str, *, taxpayer_tax_number: str, settings: Settings,
-            claude: ClaudeExtractor | None = None) -> tuple[ExtractedDocument, dict]:
+            claude: ClaudeExtractor | None = None, hint_text: str | None = None,
+            upright: bool = False) -> tuple[ExtractedDocument, dict]:
     """Return (document, metadata) choosing the most authoritative source."""
     if file_kind == "xml":
         try:
@@ -71,7 +72,7 @@ def extract(content: bytes, mime_type: str, file_kind: str, *, taxpayer_tax_numb
                 pass
     if claude is None and not settings.anthropic_api_key:
         return _extract_free(content, mime_type, file_kind, taxpayer_tax_number=taxpayer_tax_number,
-                             settings=settings)
+                             settings=settings, hint_text=hint_text, upright=upright)
     ocr_text, ocr_name = None, None
     try:
         provider = get_ocr_provider(settings)
@@ -95,8 +96,20 @@ def extract(content: bytes, mime_type: str, file_kind: str, *, taxpayer_tax_numb
                  "usage": result.usage}
 
 
+def parse_device_text(text_: str, *, taxpayer_tax_number: str | None) -> tuple[ExtractedDocument, dict, float]:
+    """Parse OCR text produced on the user's phone; returns (document, meta, completeness score)."""
+    from app.services.extraction.receipt_parser import parse_text, score
+
+    doc, notes = parse_text(text_, source="ocr_rules")
+    if doc.supplier.tax_number and doc.supplier.tax_number == taxpayer_tax_number:
+        doc.direction = "sales"
+    return doc, {"source": "ocr_rules", "ocr_provider": "device", "raw_text": text_[:20000], "notes": notes}, \
+        score(doc, notes)
+
+
 def _extract_free(content: bytes, mime_type: str, file_kind: str, *, taxpayer_tax_number: str,
-                  settings: Settings) -> tuple[ExtractedDocument, dict]:
+                  settings: Settings, hint_text: str | None = None,
+                  upright: bool = False) -> tuple[ExtractedDocument, dict]:
     """No AI key: PDF text layer or on-server Tesseract OCR + Turkish receipt rules.
     Falls back to manual entry when nothing readable is found."""
     from app.services.extraction import local_ocr
@@ -110,7 +123,7 @@ def _extract_free(content: bytes, mime_type: str, file_kind: str, *, taxpayer_ta
             if len(text.strip()) < 40 and settings.local_ocr_enabled and local_ocr.available():
                 text, how = local_ocr.ocr_pdf(content), "ocr_rules"
         elif file_kind == "image" and settings.local_ocr_enabled and local_ocr.available():
-            text, how = local_ocr.ocr_image(content), "ocr_rules"
+            text, how = local_ocr.ocr_image(content, hints=[hint_text] if hint_text else (), upright=upright), "ocr_rules"
     except (local_ocr.LocalOcrError, OSError, ValueError) as exc:
         log.warning("local ocr failed", extra={"error_code": type(exc).__name__})
         text = ""
@@ -301,11 +314,19 @@ def process_document_unlocked(engine, *, firm_id, document_id, storage: Storage,
                       JOIN public.taxpayers t ON t.id = d.taxpayer_id AND t.firm_id = d.firm_id
                      WHERE d.firm_id = :f AND d.id = :d"""),
             {"f": firm_id, "d": document_id}).mappings().one_or_none()
+        # text already read on the user's phone (partial result) competes with the server OCR
+        hint = conn.execute(text("""SELECT raw_text FROM public.extracted_data WHERE firm_id = :f
+                                    AND document_id = :d AND is_current AND ocr_provider = 'device'"""),
+                            {"f": firm_id, "d": document_id}).scalar() if row is not None else None
     if row is None or row["deleted_at"] is not None or row["status"] in ("approved", "exported"):
         raise DocumentGone()
     content = storage.get(row["storage_bucket"], row["storage_path"])
     doc, meta = extract(content, row["mime_type"], row["file_kind"],
-                        taxpayer_tax_number=row["taxpayer_tax_number"], settings=settings, claude=claude)
+                        taxpayer_tax_number=row["taxpayer_tax_number"], settings=settings, claude=claude,
+                        hint_text=hint,
+                        # cropped + straightened by the in-app scanner: skip the slow geometry first
+                        upright=row["source"] == "camera"
+                        and (row["capture_metadata"] or {}).get("scanner") == "maliscan-web")
     with service_transaction(engine) as conn:
         current = conn.execute(text("""SELECT status, deleted_at FROM public.documents
                                        WHERE firm_id = :f AND id = :d FOR UPDATE"""),
@@ -341,4 +362,4 @@ def process_document(conn: Connection, *, firm_id, document_id, storage: Storage
     return "needs_review"
 
 
-__all__ = ["ProcessingError", "DocumentGone", "process_document", "process_document_unlocked", "save_extraction", "build_journal", "extract", "Decimal"]
+__all__ = ["parse_device_text", "ProcessingError", "DocumentGone", "process_document", "process_document_unlocked", "save_extraction", "build_journal", "extract", "Decimal"]

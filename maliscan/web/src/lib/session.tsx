@@ -38,6 +38,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Free hosting sleeps after ~15 idle minutes; while the app is open and visible, keep the
+  // API warm so a receipt captured after a pause is not stuck behind a cold start.
+  useEffect(() => {
+    const t = setInterval(() => { if (document.visibilityState === "visible") wakeApi(); }, 5 * 60 * 1000);
+    const onVisible = () => document.visibilityState === "visible" && wakeApi();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
+
   useEffect(() => {
     wakeApi();
     let mounted = true;

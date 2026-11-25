@@ -4,7 +4,7 @@ const supabase = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const staticExport = process.env.STATIC_EXPORT === "1";
 export const csp = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   `img-src 'self' data: blob: ${api} ${supabase}`,
   `media-src 'self' blob:`,

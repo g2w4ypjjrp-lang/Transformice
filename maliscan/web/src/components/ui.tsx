@@ -93,7 +93,7 @@ export function Badge({ children, tone = "slate" }: { children: ReactNode; tone?
   return <span className={cn("inline-flex rounded-md px-1.5 py-0.5 text-xs font-medium", t)}>{children}</span>;
 }
 
-export function Confidence({ value, threshold = 0.85 }: { value: string | number | null | undefined; threshold?: number }) {
+export function Confidence({ value, threshold = 0.8 }: { value: string | number | null | undefined; threshold?: number }) {
   if (value === null || value === undefined) return <span className="text-ink-400">—</span>;
   const v = Number(value);
   const tone = v >= threshold ? "bg-accent-500" : v >= 0.6 ? "bg-amber-500" : "bg-red-500";

@@ -52,6 +52,7 @@ function DocumentReview() {
   const [rejectOpen, setRejectOpen] = useState(false);
   const [comment, setComment] = useState("");
   const [ackDup, setAckDup] = useState(false);
+  const [info, setInfo] = useState<string | null>(null);
   const base = firm ? `/firms/${firm.firm_id}/documents/${id}` : "";
 
   const load = useCallback(async () => {
@@ -75,6 +76,25 @@ function DocumentReview() {
     const cr = lines.reduce((s, l) => s + Number(l.credit || 0), 0);
     return { dr, cr, balanced: Math.abs(dr - cr) < 0.005 && dr > 0 };
   }, [lines]);
+
+  const isVat = (code: string) => /^(191|391|360)/.test(code);
+  const expenseIdx = lines.findIndex((l) => Number(l.debit) > 0 && !isVat(l.account_code));
+  const dirty = !!d?.journal && JSON.stringify(lines.map((l) => [l.account_code, Number(l.debit || 0).toFixed(2), Number(l.credit || 0).toFixed(2)]))
+    !== JSON.stringify(d.journal.lines.map((l) => [l.account_code, Number(l.debit || 0).toFixed(2), Number(l.credit || 0).toFixed(2)]));
+
+  async function saveJournal() {
+    if (!d) return;
+    const r = await api<{ created_accounts?: string[]; learned?: { account: string; rebooked: number } | null }>(`${base}/journal`, { method: "PUT", json: {
+      entry_date: d.journal?.entry_date ?? form?.document_date, description: d.journal?.description ?? form?.supplier.name,
+      document_number: d.journal?.document_number ?? form?.document_number, voucher_type: d.journal?.voucher_type ?? "mahsup",
+      lines: lines.filter((l) => l.account_code).map((l) => ({ account_code: l.account_code, description: l.description || null,
+        debit: Number(l.debit || 0).toFixed(2), credit: Number(l.credit || 0).toFixed(2) })) } });
+    const parts: string[] = [];
+    if (r.created_accounts?.length) parts.push(`${r.created_accounts.join(", ")} hesap planına eklendi.`);
+    if (r.learned) parts.push(`Bu satıcının fişleri bundan sonra hep ${r.learned.account} gelecek${r.learned.rebooked ? ` (bekleyen ${r.learned.rebooked} fiş de güncellendi)` : ""}.`);
+    setInfo(parts.length ? parts.join(" ") : null);
+    if (r.created_accounts?.length) setAccounts([]);
+  }
 
   async function run(key: string, fn: () => Promise<unknown>, after?: () => void) {
     setBusy(key);
@@ -132,6 +152,7 @@ function DocumentReview() {
       </div>
 
       {error && <div className="mb-4"><Alert>{error}</Alert></div>}
+      {info && <div className="mb-4"><Alert tone="green">{info}</Alert></div>}
       {["queued", "processing"].includes(doc.status) && <div className="mb-4"><Alert tone="blue">Belge işleniyor… Sayfa otomatik yenilenecek.</Alert></div>}
       {doc.status === "failed" && <div className="mb-4"><Alert>İşleme hatası: {doc.error_code}. Yeniden okutabilir veya yevmiyeyi elle girebilirsiniz.</Alert></div>}
 
@@ -213,11 +234,7 @@ function DocumentReview() {
             <Card title={<span className="flex items-center gap-2">Yevmiye kaydı {d.journal && <StatusBadge status={d.journal.status} />}</span>}
               actions={journalEditable && (
                 <Button size="sm" variant="secondary" disabled={!totals.balanced} loading={busy === "journal"}
-                  onClick={() => run("journal", () => api(`${base}/journal`, { method: "PUT", json: {
-                    entry_date: d.journal?.entry_date ?? form?.document_date, description: d.journal?.description ?? form?.supplier.name,
-                    document_number: d.journal?.document_number ?? form?.document_number, voucher_type: d.journal?.voucher_type ?? "mahsup",
-                    lines: lines.filter((l) => l.account_code).map((l) => ({ account_code: l.account_code, description: l.description || null,
-                      debit: Number(l.debit || 0).toFixed(2), credit: Number(l.credit || 0).toFixed(2) })) } }))}>
+                  onClick={() => run("journal", saveJournal)}>
                   <Save className="h-4 w-4" />Yevmiyeyi kaydet</Button>)}>
               {!d.journal && lines.length === 0 && !journalEditable ? <p className="text-sm text-ink-500">Yevmiye taslağı henüz oluşmadı.</p> : (
                 <>
@@ -235,7 +252,7 @@ function DocumentReview() {
                               <td className="py-1.5 pr-2 align-top">
                                 {journalEditable ? <Input list="accounts" value={l.account_code} onChange={(e) => upd({ account_code: e.target.value.trim() })} className="w-32 py-1.5 font-mono" />
                                   : <span className="font-mono">{l.account_code}</span>}
-                                <div className={cn("mt-0.5 max-w-[160px] truncate text-[11px]", name ? "text-ink-500" : "text-red-600")}>{name ?? "Hesap planında yok"}</div>
+                                <div className={cn("mt-0.5 max-w-[160px] truncate text-[11px]", name ? "text-ink-500" : "text-amber-700")}>{name ?? (l.account_code ? "Yeni hesap — kaydedince eklenir" : "")}</div>
                               </td>
                               <td className="py-1.5 pr-2 align-top">{journalEditable ? <Input value={l.description ?? ""} onChange={(e) => upd({ description: e.target.value })} className="min-w-[160px] py-1.5" /> : l.description}</td>
                               <td className="py-1.5 pr-2 text-right align-top tabular-nums">{journalEditable ? <Input inputMode="decimal" value={Number(l.debit) ? l.debit : ""} onChange={(e) => upd({ debit: parseAmount(e.target.value), credit: "0" })} className="w-28 py-1.5 text-right" /> : (Number(l.debit) ? fmtMoney(l.debit) : "")}</td>
@@ -257,11 +274,23 @@ function DocumentReview() {
 
           {doc.status === "needs_review" && can(...BOOKERS) && (
             <Card>
+              {journalEditable && expenseIdx >= 0 && (
+                <div className="mb-4 flex flex-wrap items-end gap-3">
+                  <Field label="Gider hesabı" hint="Değiştirirseniz bu satıcının fişleri hep bu hesapla gelir">
+                    <Input list="accounts-quick" value={lines[expenseIdx].account_code} className="w-40 font-mono"
+                      onChange={(e) => { const v = e.target.value.trim(); setLines((ls) => ls.map((x, k) => (k === expenseIdx ? { ...x, account_code: v } : x))); }} />
+                  </Field>
+                  <span className="pb-2 text-xs text-ink-500">{accounts.find((a) => a.code === lines[expenseIdx].account_code)?.name ?? (lines[expenseIdx].account_code ? "Yeni hesap — onaylayınca hesap planına eklenir" : "")}</span>
+                  <datalist id="accounts-quick">{accounts.map((a) => <option key={a.id} value={a.code}>{a.name}</option>)}</datalist>
+                </div>)}
               {doc.duplicate_of && <label className="mb-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={ackDup} onChange={(e) => setAckDup(e.target.checked)} />Bu belgenin mükerrer olmadığını kontrol ettim.</label>}
               {errors.length > 0 && <p className="mb-3 text-xs text-red-700">Veride {errors.length} hata var. Onaylamadan önce belge ile karşılaştırın.</p>}
               <div className="flex flex-wrap gap-2">
                 <Button variant="success" loading={busy === "approve"} disabled={!d.journal || !totals.balanced || (!!doc.duplicate_of && !ackDup)}
-                  onClick={() => run("approve", () => api(`${base}/approve`, { method: "POST", json: { acknowledge_duplicate: ackDup } }), goNext)}>
+                  onClick={() => run("approve", async () => {
+                    if (dirty) await saveJournal();  // a changed account code is never lost
+                    await api(`${base}/approve`, { method: "POST", json: { acknowledge_duplicate: ackDup } });
+                  }, goNext)}>
                   <Check className="h-4 w-4" />Onayla ve sonrakine geç</Button>
                 <Button variant="danger" onClick={() => setRejectOpen(true)}><X className="h-4 w-4" />Reddet</Button>
               </div>

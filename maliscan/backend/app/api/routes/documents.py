@@ -19,7 +19,8 @@ from app.core.config import get_settings
 from app.domain.rules import ACCOUNT_RE
 from app.services.extraction.schema import ExtractedDocument
 from app.services.files import FileRejected, validate_upload
-from app.services.pipeline import ProcessingError, build_journal, save_extraction
+from app.services.learning import ensure_accounts, learn_from_journal
+from app.services.pipeline import ProcessingError, build_journal, parse_device_text, save_extraction
 from app.services.storage import StorageError, get_storage
 
 router = APIRouter(prefix="/firms/{firm_id}", tags=["documents"])
@@ -77,6 +78,31 @@ def _enqueue(conn: Connection, firm_id, doc_id, job_type: str = "extract_documen
     )
 
 
+def _process_device_text(conn: Connection, firm_id, taxpayer_id, doc_id, ocr_text: str) -> bool:
+    """The phone already read the receipt: parse it now, in the upload request. Returns True when the
+    result is complete (status needs_review, no server OCR needed). A partial result is saved too
+    (shown at once) and the server OCR job then tries to improve it."""
+    from app.services.extraction.local_ocr import GOOD_ENOUGH
+
+    tax = conn.execute(text("SELECT tax_number FROM public.taxpayers WHERE firm_id = :f AND id = :t"),
+                       {"f": firm_id, "t": taxpayer_id}).scalar()
+    doc, meta, sc = parse_device_text(ocr_text, taxpayer_tax_number=tax)
+    if sc < 3:  # nothing useful (no total) — let the server read the image
+        return False
+    save_extraction(conn, firm_id=firm_id, document_id=doc_id, doc=doc, meta=meta, created_by=None)
+    can_book = conn.execute(text("SELECT app.has_firm_role(:f, ARRAY['owner','admin','accountant'])"),
+                            {"f": firm_id}).scalar()
+    complete = sc >= GOOD_ENOUGH
+    if can_book:
+        build_journal(conn, firm_id=firm_id, document_id=doc_id, created_by=None)
+    elif complete:
+        _enqueue(conn, firm_id, doc_id, job_type="generate_journal", priority=10)
+    if complete:
+        conn.execute(text("UPDATE public.documents SET status = 'needs_review' WHERE firm_id = :f AND id = :d"),
+                     {"f": firm_id, "d": doc_id})
+    return complete
+
+
 # ============================================================================ upload
 @router.post("/taxpayers/{taxpayer_id}/documents", response_model=DocumentSummary, status_code=201,
              summary="Upload a receipt/invoice (JPEG/PNG/WEBP/PDF/UBL-TR XML) and queue it for processing")
@@ -85,6 +111,7 @@ async def upload_document(
     file: UploadFile = File(...),
     source: Literal["camera", "upload", "email", "api"] = Form("upload"),
     capture_metadata: str | None = Form(None, max_length=4000),
+    ocr_text: str | None = Form(None, max_length=20000),
 ) -> DocumentSummary:
     require_firm_role(conn, firm_id, WRITERS)
     tp = conn.execute(text("SELECT id FROM public.taxpayers WHERE firm_id = :f AND id = :t AND deleted_at IS NULL "
@@ -131,7 +158,11 @@ async def upload_document(
              "fn": (file.filename or "")[:200] or None, "mime": vf.mime_type, "size": len(vf.content), "h": vf.sha256,
              "pages": vf.page_count, "meta": json.dumps(meta)},
         )
-        _enqueue(conn, firm_id, doc_id, priority=50 if vf.file_kind == "xml" else 100)
+        instant = False
+        if ocr_text and vf.file_kind == "image" and not settings.anthropic_api_key:
+            instant = _process_device_text(conn, firm_id, taxpayer_id, doc_id, ocr_text)
+        if not instant:
+            _enqueue(conn, firm_id, doc_id, priority=50 if vf.file_kind == "xml" else 100)
     except Exception:
         try:
             get_storage().delete("documents", path)  # no orphan files when the DB insert fails (e.g. plan limit)
@@ -227,7 +258,7 @@ def get_document(firm_id: uuid.UUID, document_id: uuid.UUID, conn: DB) -> dict:
         "journal": _journal(conn, firm_id, document_id),
         "history": [dict(h) for h in history],
         "job": dict(job) if job else None,
-        "review_threshold": get_settings().review_confidence_threshold,
+        "review_threshold": _threshold(get_settings().review_confidence_threshold, ed["source"] if ed else None),
     }
 
 
@@ -303,11 +334,14 @@ def edit_journal(firm_id: uuid.UUID, document_id: uuid.UUID, body: JournalIn, co
     td, tc = sum(l.debit for l in body.lines), sum(l.credit for l in body.lines)
     if td != tc:
         raise ApiError(422, "unbalanced", f"debit {td} ≠ credit {tc}")
-    chart = {r[0] for r in conn.execute(text("""SELECT code FROM public.chart_of_accounts WHERE firm_id = :f
-                AND taxpayer_id = :t AND is_active AND is_postable"""), {"f": firm_id, "t": d["taxpayer_id"]})}
-    missing = sorted({l.account_code for l in body.lines} - chart) if chart else []
-    if missing:
-        raise ApiError(422, "account_not_in_chart", f"accounts not in chart: {', '.join(missing)}")
+    # codes the user typed that are not in the chart yet (e.g. 770.20) are defined automatically
+    created = ensure_accounts(conn, firm_id, d["taxpayer_id"], {l.account_code for l in body.lines})
+    group = sorted(r[0] for r in conn.execute(text("""SELECT code FROM public.chart_of_accounts WHERE firm_id = :f
+                AND taxpayer_id = :t AND code = ANY(:c) AND NOT (is_active AND is_postable)"""),
+                {"f": firm_id, "t": d["taxpayer_id"], "c": [l.account_code for l in body.lines]}))
+    if group:
+        raise ApiError(422, "account_not_postable",
+                       f"group/inactive accounts cannot be posted to (use a sub-account): {', '.join(group)}")
     je = conn.execute(text("""SELECT id, status FROM public.journal_entries WHERE firm_id = :f AND document_id = :d
                               AND status <> 'rejected'"""), {"f": firm_id, "d": document_id}).mappings().one_or_none()
     if je and je["status"] != "draft":
@@ -337,7 +371,8 @@ def edit_journal(firm_id: uuid.UUID, document_id: uuid.UUID, body: JournalIn, co
                      {"f": firm_id, "j": j, "n": i, "a": l.account_code, "desc": l.description, "d": l.debit,
                       "c": l.credit, "r": l.vat_rate})
     audit(conn, firm_id, "journal.edited", "journal_entry", j, {"lines": len(body.lines)})
-    return _journal(conn, firm_id, document_id) or {}
+    learned = learn_from_journal(conn, firm_id, document_id, j)
+    return {**(_journal(conn, firm_id, document_id) or {}), "created_accounts": created, "learned": learned}
 
 
 # ============================================================================ approval workflow
@@ -371,16 +406,8 @@ def _approve_one(conn: Connection, firm_id, document_id, body: ApproveIn) -> Non
     conn.execute(text("""INSERT INTO public.approvals (firm_id, document_id, journal_entry_id, action, actor_user_id,
                             comment) VALUES (:f, :d, :j, 'approve', auth.uid(), :c)"""),
                  {"f": firm_id, "d": document_id, "j": je, "c": body.comment})
-    if body.learn_mapping and d["supplier_tax_number"] and d["direction"] != "sales":
-        acc = conn.execute(text("""SELECT account_code FROM public.journal_lines WHERE journal_entry_id = :j
-                                   AND debit > 0 AND coalesce(source_note,'') <> 'vat'
-                                   ORDER BY debit DESC LIMIT 1"""), {"j": je}).scalar()
-        if acc:
-            conn.execute(text("""INSERT INTO public.account_mappings (firm_id, taxpayer_id, match_field, match_value,
-                                    account_code, source, priority, created_by)
-                                 VALUES (:f, :t, 'supplier_tax_number', :v, :a, 'learned', 500, auth.uid())
-                                 ON CONFLICT DO NOTHING"""),
-                         {"f": firm_id, "t": d["taxpayer_id"], "v": d["supplier_tax_number"], "a": acc})
+    if body.learn_mapping:
+        learn_from_journal(conn, firm_id, document_id, je)
     audit(conn, firm_id, "document.approved", "document", document_id)
 
 
@@ -389,6 +416,15 @@ def approve(firm_id: uuid.UUID, document_id: uuid.UUID, body: ApproveIn, conn: D
     require_firm_role(conn, firm_id, BOOKERS)
     _approve_one(conn, firm_id, document_id, body)
     return {"status": "approved"}
+
+
+# The free OCR + rule parser scores a complete, arithmetically consistent receipt at 0.80 (it never
+# claims AI-level certainty); without this, bulk approval skipped every free-mode receipt.
+FREE_OCR_SOURCES = ("ocr_rules", "pdf_text")
+
+
+def _threshold(default: float, source: str | None) -> float:
+    return min(default, 0.80) if source in FREE_OCR_SOURCES else default
 
 
 class BulkApproveIn(BaseModel):
@@ -403,7 +439,7 @@ def bulk_approve(firm_id: uuid.UUID, body: BulkApproveIn, conn: DB) -> dict:
     threshold = get_settings().review_confidence_threshold
     approved, skipped = [], []
     for doc_id in dict.fromkeys(body.document_ids):
-        row = conn.execute(text("""SELECT d.overall_confidence, d.duplicate_of,
+        row = conn.execute(text("""SELECT d.overall_confidence, d.duplicate_of, ed.source,
                                       (SELECT count(*) FROM jsonb_array_elements(ed.validation_issues) i
                                         WHERE i->>'severity' = 'error') AS errors
                                      FROM public.documents d LEFT JOIN public.extracted_data ed
@@ -416,7 +452,7 @@ def bulk_approve(firm_id: uuid.UUID, body: BulkApproveIn, conn: DB) -> dict:
             reason = "possible_duplicate"
         elif row["errors"]:
             reason = "validation_errors"
-        elif row["overall_confidence"] is None or float(row["overall_confidence"]) < threshold:
+        elif row["overall_confidence"] is None or float(row["overall_confidence"]) < _threshold(threshold, row["source"]):
             reason = "low_confidence"
         if reason:
             skipped.append({"document_id": str(doc_id), "reason": reason})

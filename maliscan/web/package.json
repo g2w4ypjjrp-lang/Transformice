@@ -9,14 +9,18 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build:static": "node scripts/write-headers.mjs && STATIC_EXPORT=1 next build"
+    "build:static": "node scripts/write-headers.mjs && node scripts/copy-tesseract.mjs && STATIC_EXPORT=1 next build",
+    "predev": "node scripts/copy-tesseract.mjs",
+    "prebuild": "node scripts/copy-tesseract.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.80.0",
+    "@tesseract.js-data/tur": "1.0.0",
     "lucide-react": "0.460.0",
     "next": "14.2.35",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "tesseract.js": "6.0.1"
   },
   "devDependencies": {
     "@types/node": "20.17.6",

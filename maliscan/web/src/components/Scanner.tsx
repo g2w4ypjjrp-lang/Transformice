@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import { api, upload } from "@/lib/api";
 import { fmtMoney } from "@/lib/format";
+import { readOnDevice, warmOcr } from "@/lib/ocr";
 import { Detection, detectDocuments, StabilityTracker } from "@/lib/scanner/detect";
 import { enhance, EnhanceMode, sharpness } from "@/lib/scanner/enhance";
 import { Img, Quad, targetSize, warp } from "@/lib/scanner/geometry";
@@ -22,6 +23,9 @@ interface QueueItem {
   documentId?: string;
   blurry?: boolean;
   source: "camera" | "upload";
+  /** on-device OCR before upload (text is sent along, so the server answers at once) */
+  ocr: "todo" | "running" | "done";
+  ocrText?: string | null;
   /** result of server-side reading after upload */
   read?: "reading" | "ok" | "partial" | "failed";
   summary?: string;
@@ -94,8 +98,15 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
   autoRef.current = auto;
   modeRef.current = mode;
 
-  const addToQueue = useCallback((items: Omit<QueueItem, "id" | "status" | "progress">[]) => {
-    setQueue((q) => [...q, ...items.map((it) => ({ ...it, id: crypto.randomUUID(), status: "pending" as const, progress: 0 }))]);
+  const celebrate = useCallback((summary: string) => {
+    setOkFlash(summary);
+    navigator.vibrate?.([30, 60, 30]);
+    setTimeout(() => setOkFlash(null), 1500);
+  }, []);
+
+  const addToQueue = useCallback((items: Omit<QueueItem, "id" | "status" | "progress" | "ocr">[]) => {
+    setQueue((q) => [...q, ...items.map((it) => ({ ...it, id: crypto.randomUUID(), status: "pending" as const, progress: 0,
+      ocr: (it.blob.type.startsWith("image/") && it.blob.type !== "image/heic" ? "todo" : "done") as QueueItem["ocr"] }))]);
   }, []);
 
   // ---------------------------------------------------------------- camera lifecycle
@@ -121,6 +132,7 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
       setTorch(caps.torch ? false : null);
       trackerRef.current = new StabilityTracker(Math.hypot(DETECT_WIDTH, DETECT_WIDTH * 0.75), 8);
       setCamera("on");
+      warmOcr();
     } catch (e) {
       setCamera((e as DOMException)?.name === "NotAllowedError" ? "denied" : "unsupported");
     }
@@ -238,19 +250,47 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
     }
   };
 
+  // photos that are not uploaded yet live only in this page: warn before leaving
+  useEffect(() => {
+    const busy = queue.some((q) => q.status === "pending" || q.status === "uploading");
+    if (!busy) return;
+    const h = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [queue]);
+
+  // ---------------------------------------------------------------- on-device OCR (one at a time, parallel to camera)
+  useEffect(() => {
+    if (queue.some((q) => q.ocr === "running")) return;
+    const next = queue.find((q) => q.ocr === "todo");
+    if (!next) return;
+    setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, ocr: "running" } : it)));
+    readOnDevice(next.blob).then((text) =>
+      setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, ocr: "done", ocrText: text } : it))));
+  }, [queue]);
+
   // ---------------------------------------------------------------- upload queue (sequential)
   useEffect(() => {
     if (!taxpayerId) return;
-    const next = queue.find((q) => q.status === "pending");
+    const next = queue.find((q) => q.status === "pending" && q.ocr === "done");
     if (!next || queue.some((q) => q.status === "uploading")) return;
     setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, status: "uploading" } : it)));
     const form = new FormData();
     form.append("file", next.blob, next.name);
     form.append("source", next.source);
-    form.append("capture_metadata", JSON.stringify({ scanner: "maliscan-web", mode, blurry: !!next.blurry }));
-    upload<{ id: string }>(`/firms/${firmId}/taxpayers/${taxpayerId}/documents`, form, (p) =>
+    form.append("capture_metadata", JSON.stringify({ scanner: "maliscan-web", mode, blurry: !!next.blurry, device_ocr: !!next.ocrText }));
+    if (next.ocrText) form.append("ocr_text", next.ocrText.slice(0, 20000));
+    type Summary = { id: string; status: string; total_amount: string | null; document_date: string | null };
+    upload<Summary>(`/firms/${firmId}/taxpayers/${taxpayerId}/documents`, form, (p) =>
       setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, progress: p } : it))))
-      .then((doc) => setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, status: "done", documentId: doc.id, read: "reading" } : it))))
+      .then((doc) => {
+        // read on the phone and parsed by the server in the same request → result is already there
+        const instant = doc.status === "needs_review";
+        const ok = instant && !!doc.total_amount && !!doc.document_date;
+        setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, status: "done", documentId: doc.id,
+          read: instant ? (ok ? "ok" : "partial") : "reading", summary: doc.total_amount ? fmtMoney(doc.total_amount) : undefined } : it)));
+        if (ok) celebrate(fmtMoney(doc.total_amount));
+      })
       .catch((err) => setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, status: "error", error: err.message } : it))));
   }, [queue, taxpayerId, firmId, mode]);
 
@@ -269,18 +309,14 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
           const read: QueueItem["read"] = st === "failed" ? "failed" : ok ? "ok" : "partial";
           const summary = d.document.total_amount ? fmtMoney(d.document.total_amount) : undefined;
           setQueue((q) => q.map((x) => (x.id === it.id ? { ...x, read, summary } : x)));
-          if (read === "ok") {
-            setOkFlash(summary ?? "Okundu");
-            navigator.vibrate?.([30, 60, 30]);
-            setTimeout(() => setOkFlash(null), 1800);
-          }
+          if (read === "ok") celebrate(summary ?? "Okundu");
         } catch { /* try again next tick */ }
       }
     }, 3000);
     return () => clearTimeout(t);
-  }, [queue, firmId]);
+  }, [queue, firmId, celebrate]);
 
-  const retry = (id: string) => setQueue((q) => q.map((it) => (it.id === id ? { ...it, status: "pending", error: undefined, progress: 0 } : it)));
+  const retry = (id: string) => setQueue((q) => q.map((it) => (it.id === id ? { ...it, status: "pending", error: undefined, progress: 0, read: undefined } : it)));
   const remove = (id: string) => setQueue((q) => q.filter((it) => it.id !== id || it.status === "uploading"));
 
   const done = queue.filter((q) => q.status === "done").length;
@@ -364,7 +400,7 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-medium">{it.name}</p>
                 {it.status === "uploading" && <div className="mt-1 h-1 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-brand-500" style={{ width: `${it.progress * 100}%` }} /></div>}
-                {it.status === "pending" && <p className="text-xs text-ink-500">{taxpayerId ? "Sırada" : "Mükellef seçin"}</p>}
+                {it.status === "pending" && <p className="inline-flex items-center gap-1 text-xs text-ink-500">{!taxpayerId ? "Mükellef seçin" : it.ocr === "done" ? "Sırada" : <><Loader2 className="h-3 w-3 animate-spin" />Telefonda okunuyor…</>}</p>}
                 {it.status === "done" && <Link href={`/documents/view?id=${it.documentId}`} className={cn("inline-flex items-center gap-1 text-xs hover:underline",
                   it.read === "failed" ? "text-red-600" : it.read === "partial" ? "text-amber-700" : "text-accent-700")}>
                   {it.read === "reading" ? <><Loader2 className="h-3 w-3 animate-spin" />Okunuyor…</>
