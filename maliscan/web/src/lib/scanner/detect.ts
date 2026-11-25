@@ -120,25 +120,26 @@ export function detectDocuments(img: Img, opts: DetectOptions = {}): Detection[]
 export class StabilityTracker {
   private last: Quad | null = null;
   private stableFrames = 0;
+  private absentFrames = 0;
   private armed = true;
 
-  constructor(private diag: number, private needFrames = 12, private tolerance = 0.015) {}
+  /** `rearmFrames`: the document must be out of view this many frames in a row before the next
+   *  auto-capture — a single dropped detection (hand shake, glare) must not cause a second photo. */
+  constructor(private diag: number, private needFrames = 12, private tolerance = 0.015, private rearmFrames = 8) {}
 
-  /** Returns true exactly once when the document has been still for `needFrames` frames. */
+  /** Returns true exactly once per document placed in view and held still for `needFrames` frames. */
   update(quad: Quad | null): boolean {
     if (!quad) {
       this.last = null;
       this.stableFrames = 0;
-      this.armed = true; // document removed → ready for the next one
+      if (++this.absentFrames >= this.rearmFrames) this.armed = true; // document really removed
       return false;
     }
+    this.absentFrames = 0;
     if (this.last) {
       const move = Math.max(...quad.map((p, i) => Math.hypot(p.x - this.last![i].x, p.y - this.last![i].y))) / this.diag;
       if (move < this.tolerance) this.stableFrames++;
-      else {
-        this.stableFrames = 0;
-        if (move > 0.15) this.armed = true; // a different document was placed
-      }
+      else this.stableFrames = 0;
     }
     this.last = quad;
     if (this.armed && this.stableFrames >= this.needFrames) {
@@ -147,6 +148,12 @@ export class StabilityTracker {
       return true;
     }
     return false;
+  }
+
+  /** A manual photo was taken: do not auto-capture the same document again. */
+  disarm(): void {
+    this.armed = false;
+    this.stableFrames = 0;
   }
 
   get progress(): number {

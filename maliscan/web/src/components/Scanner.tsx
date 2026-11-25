@@ -65,9 +65,18 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
   const trackerRef = useRef<StabilityTracker | null>(null);
   const detectionsRef = useRef<Detection[]>([]);
   const busyRef = useRef(false);
+  const lastShotRef = useRef(0);
 
   const [camera, setCamera] = useState<"idle" | "starting" | "on" | "unsupported" | "denied">("idle");
-  const [auto, setAuto] = useState(true);
+  // Off by default: people press the shutter themselves; auto + manual produced extra photos.
+  const [auto, setAutoState] = useState(false);
+  useEffect(() => {
+    try { if (localStorage.getItem("maliscan.autoCapture") === "1") setAutoState(true); } catch { /* private mode */ }
+  }, []);
+  const setAuto = (v: boolean) => {
+    setAutoState(v);
+    try { localStorage.setItem("maliscan.autoCapture", v ? "1" : "0"); } catch { /* private mode */ }
+  };
   const [mode, setMode] = useState<EnhanceMode>("gray");
   const [torch, setTorch] = useState<boolean | null>(null);
   const [progress, setProgress] = useState(0);
@@ -124,6 +133,8 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
   const capture = useCallback(async (source: "auto" | "manual") => {
     const v = videoRef.current;
     if (!v || busyRef.current || !v.videoWidth) return;
+    // one photo per press / per document: ignore double taps and auto+manual firing together
+    if (Date.now() - lastShotRef.current < 2000) return;
     busyRef.current = true;
     try {
       const full = document.createElement("canvas");
@@ -131,8 +142,11 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
       full.height = v.videoHeight;
       full.getContext("2d")!.drawImage(v, 0, 0);
       const s = v.videoWidth / DETECT_WIDTH;
-      const quads = detectionsRef.current.map((d) => scaleQuad(d.quad, s));
+      // camera shot = one receipt: only the largest detected document (stray bright areas are ignored)
+      const quads = detectionsRef.current.slice(0, 1).map((d) => scaleQuad(d.quad, s));
       if (source === "auto" && !quads.length) return;
+      lastShotRef.current = Date.now();
+      trackerRef.current?.disarm();
       setFlash(true);
       setTimeout(() => setFlash(false), 150);
       navigator.vibrate?.(40);

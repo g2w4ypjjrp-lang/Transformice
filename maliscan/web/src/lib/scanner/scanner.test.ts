@@ -113,8 +113,23 @@ describe("stability tracker", () => {
     const t = new StabilityTracker(1000, 5);
     const fired = Array.from({ length: 12 }, () => t.update(q));
     expect(fired.filter(Boolean).length).toBe(1);
-    t.update(null);
+    for (let i = 0; i < 8; i++) t.update(null);
     expect(Array.from({ length: 8 }, () => t.update(q)).filter(Boolean).length).toBe(1);
+  });
+  it("a flickering detection or a big hand movement does not take a second photo", () => {
+    const t = new StabilityTracker(1000, 5);
+    let shots = 0;
+    for (let round = 0; round < 10; round++) {
+      for (let i = 0; i < 8; i++) shots += Number(t.update(q));
+      shots += Number(t.update(null)); // one dropped frame
+      shots += Number(t.update(q.map((p) => ({ x: p.x + 400, y: p.y })) as Quad)); // jump
+    }
+    expect(shots).toBe(1);
+  });
+  it("manual capture disarms auto capture for that document", () => {
+    const t = new StabilityTracker(1000, 5);
+    t.disarm();
+    expect(Array.from({ length: 20 }, () => t.update(q)).some(Boolean)).toBe(false);
   });
   it("does not fire while moving", () => {
     const t = new StabilityTracker(1000, 5);
