@@ -264,9 +264,44 @@ def build_journal(conn: Connection, *, firm_id, document_id, created_by: uuid.UU
     return j
 
 
+class DocumentGone(Exception):
+    """The document was deleted (or booked) while waiting/processing — skip quietly."""
+
+
+def process_document_unlocked(engine, *, firm_id, document_id, storage: Storage, settings: Settings,
+                              claude: ClaudeExtractor | None = None) -> str:
+    """Pipeline in three short steps so slow OCR/AI never holds a row lock:
+    1) read the document row, 2) download + extract with no transaction open,
+    3) lock the row, re-check it is still processable, save results."""
+    from app.db.session import service_transaction
+
+    with service_transaction(engine) as conn:
+        row = conn.execute(
+            text("""SELECT d.*, t.tax_number AS taxpayer_tax_number FROM public.documents d
+                      JOIN public.taxpayers t ON t.id = d.taxpayer_id AND t.firm_id = d.firm_id
+                     WHERE d.firm_id = :f AND d.id = :d"""),
+            {"f": firm_id, "d": document_id}).mappings().one_or_none()
+    if row is None or row["deleted_at"] is not None or row["status"] in ("approved", "exported"):
+        raise DocumentGone()
+    content = storage.get(row["storage_bucket"], row["storage_path"])
+    doc, meta = extract(content, row["mime_type"], row["file_kind"],
+                        taxpayer_tax_number=row["taxpayer_tax_number"], settings=settings, claude=claude)
+    with service_transaction(engine) as conn:
+        current = conn.execute(text("""SELECT status, deleted_at FROM public.documents
+                                       WHERE firm_id = :f AND id = :d FOR UPDATE"""),
+                               {"f": firm_id, "d": document_id}).mappings().one_or_none()
+        if current is None or current["deleted_at"] is not None or current["status"] in ("approved", "exported"):
+            raise DocumentGone()
+        save_extraction(conn, firm_id=firm_id, document_id=document_id, doc=doc, meta=meta, created_by=None)
+        build_journal(conn, firm_id=firm_id, document_id=document_id, created_by=None)
+        conn.execute(text("""UPDATE public.documents SET status = 'needs_review', error_code = NULL
+                             WHERE firm_id = :f AND id = :d"""), {"f": firm_id, "d": document_id})
+    return "needs_review"
+
+
 def process_document(conn: Connection, *, firm_id, document_id, storage: Storage, settings: Settings,
                      claude: ClaudeExtractor | None = None) -> str:
-    """Full pipeline for one document inside the caller's (service-role) transaction."""
+    """Single-transaction variant (kept for tools/tests that already hold a connection)."""
     row = conn.execute(
         text("""SELECT d.*, t.tax_number AS taxpayer_tax_number FROM public.documents d
                   JOIN public.taxpayers t ON t.id = d.taxpayer_id AND t.firm_id = d.firm_id
@@ -275,7 +310,7 @@ def process_document(conn: Connection, *, firm_id, document_id, storage: Storage
     if row is None or row["deleted_at"] is not None:
         raise ProcessingError("document_missing", "document no longer exists")
     if row["status"] in ("approved", "exported"):
-        return row["status"]  # never re-process booked documents
+        return row["status"]
     content = storage.get(row["storage_bucket"], row["storage_path"])
     doc, meta = extract(content, row["mime_type"], row["file_kind"],
                         taxpayer_tax_number=row["taxpayer_tax_number"], settings=settings, claude=claude)
@@ -286,4 +321,4 @@ def process_document(conn: Connection, *, firm_id, document_id, storage: Storage
     return "needs_review"
 
 
-__all__ = ["ProcessingError", "process_document", "save_extraction", "build_journal", "extract", "Decimal"]
+__all__ = ["ProcessingError", "DocumentGone", "process_document", "process_document_unlocked", "save_extraction", "build_journal", "extract", "Decimal"]

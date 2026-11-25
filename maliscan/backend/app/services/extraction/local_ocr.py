@@ -9,6 +9,7 @@ backend Docker image).
 from __future__ import annotations
 
 import io
+import os
 import shutil
 import subprocess
 import tempfile
@@ -16,7 +17,7 @@ from pathlib import Path
 
 from PIL import Image, ImageFilter, ImageOps
 
-TARGET_WIDTH = 2000
+TARGET_WIDTH = 1700  # enough for receipt fonts; keeps OCR fast on small free-tier CPUs
 
 
 class LocalOcrError(Exception):
@@ -57,7 +58,8 @@ def _tesseract(img: Image.Image, psm: str, timeout: int) -> str:
         img.save(p)
         r = subprocess.run(["tesseract", str(p), "-", "-l", "tur", "--psm", psm,
                             "-c", "preserve_interword_spaces=1"],
-                           capture_output=True, text=True, timeout=timeout)
+                           capture_output=True, text=True, timeout=timeout,
+                           env={**os.environ, "OMP_THREAD_LIMIT": "1"})
     if r.returncode != 0:
         raise LocalOcrError("tesseract failed")
     return r.stdout

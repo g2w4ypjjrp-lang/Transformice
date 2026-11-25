@@ -281,3 +281,18 @@ def test_free_mode_falls_back_to_manual_entry(client, office, engine):
     assert r.status_code == 200, r.text
     j = r.json()["journal"]
     assert j and str(j["total_debit"]) in ("1200.00", "1200")
+
+
+def test_document_deleted_while_queued_is_skipped_quietly(client, office, engine):
+    doc_id = _upload(client, office, thermal_receipt_image(tilt=3)).json()["id"]
+    job = claim_job(engine, "w", office["firm"])
+    # user deletes while the job is running — must not wait for OCR nor be flipped to "failed"
+    assert client.delete(f"/api/v1/firms/{office['firm']}/documents/{doc_id}", headers=office["h"]).status_code == 204
+    assert run_job(job, engine=engine, storage=get_storage(), settings=get_settings()) == "skipped"
+    with engine.connect() as c:
+        st, deleted = c.execute(text("SELECT status, deleted_at IS NOT NULL FROM documents WHERE id = :d"),
+                                {"d": doc_id}).one()
+        job_status = c.execute(text("SELECT status, last_error_code FROM processing_jobs WHERE id = :j"),
+                               {"j": job["id"]}).one()
+    assert deleted and st != "failed"
+    assert tuple(job_status) == ("succeeded", "skipped_document_gone")

@@ -22,7 +22,7 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import get_engine, service_transaction
 from app.services.extraction.claude import ClaudeExtractor
-from app.services.pipeline import ProcessingError, build_journal, process_document
+from app.services.pipeline import DocumentGone, ProcessingError, build_journal, process_document_unlocked
 from app.services.storage import Storage, get_storage
 
 log = logging.getLogger("maliscan.worker")
@@ -55,14 +55,15 @@ def run_job(job: dict, *, engine: Engine, storage: Storage, settings: Settings,
         with service_transaction(engine) as conn:
             if job["job_type"] == "extract_document":
                 conn.execute(text("UPDATE public.documents SET status = 'processing' WHERE firm_id = :f AND id = :d "
-                                  "AND status IN ('queued','uploaded','failed')"), {"f": firm_id, "d": doc_id})
+                                  "AND status IN ('queued','uploaded','failed') AND deleted_at IS NULL"), {"f": firm_id, "d": doc_id})
         if job["job_type"] not in ("extract_document", "generate_journal"):
             raise ProcessingError("unknown_job_type", job["job_type"])
+        if job["job_type"] == "extract_document":
+            # slow OCR/AI runs outside any transaction (no row lock → users can delete meanwhile)
+            process_document_unlocked(engine, firm_id=firm_id, document_id=doc_id, storage=storage,
+                                      settings=settings, claude=claude)
         with service_transaction(engine) as conn:
-            if job["job_type"] == "extract_document":
-                process_document(conn, firm_id=firm_id, document_id=doc_id, storage=storage, settings=settings,
-                                 claude=claude)
-            else:
+            if job["job_type"] == "generate_journal":
                 build_journal(conn, firm_id=firm_id, document_id=doc_id, created_by=None)
                 conn.execute(text("""UPDATE public.documents SET status = 'needs_review' WHERE firm_id = :f
                                      AND id = :d AND status IN ('processing','queued')"""),
@@ -71,6 +72,13 @@ def run_job(job: dict, *, engine: Engine, storage: Storage, settings: Settings,
                                  last_error_code = NULL WHERE id = :j"""), {"j": job["id"]})
         log.info("job succeeded", extra={"event": "job.succeeded", "firm_id": firm_id})
         return "succeeded"
+    except DocumentGone:
+        # deleted/booked by a user meanwhile: finish the job without touching the document
+        with service_transaction(engine) as conn:
+            conn.execute(text("""UPDATE public.processing_jobs SET status = 'succeeded', finished_at = now(),
+                                 last_error_code = 'skipped_document_gone', locked_by = NULL, locked_at = NULL
+                                 WHERE id = :j"""), {"j": job["id"]})
+        return "skipped"
     except Exception as exc:  # noqa: BLE001 — every failure must be recorded
         code = exc.code if isinstance(exc, ProcessingError) else type(exc).__name__
         retryable = exc.retryable if isinstance(exc, ProcessingError) else True
@@ -85,7 +93,8 @@ def run_job(job: dict, *, engine: Engine, storage: Storage, settings: Settings,
                                  WHERE id = :j"""),
                          {"s": status, "c": code[:100], "delay": delay, "final": final, "j": job["id"]})
             conn.execute(text("""UPDATE public.documents SET status = :st, error_code = :c
-                                 WHERE firm_id = :f AND id = :d AND status NOT IN ('approved','exported')"""),
+                                 WHERE firm_id = :f AND id = :d AND status NOT IN ('approved','exported')
+                                   AND deleted_at IS NULL"""),
                          {"st": "failed" if final else "queued", "c": code[:100], "f": firm_id, "d": doc_id})
         log.warning("job failed", extra={"event": "job.failed", "error_code": code, "firm_id": firm_id})
         return status
