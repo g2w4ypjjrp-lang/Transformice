@@ -39,13 +39,16 @@ def preprocess(content: bytes) -> Image.Image:
     return img
 
 
-def gray(content: bytes) -> Image.Image:
-    img = ImageOps.exif_transpose(Image.open(io.BytesIO(content))).convert("L")
-    img = ImageOps.autocontrast(img, cutoff=1)
+def _prep(img: Image.Image) -> Image.Image:
+    img = ImageOps.autocontrast(img.convert("L"), cutoff=1)
     if img.width < TARGET_WIDTH:
         scale = TARGET_WIDTH / img.width
         img = img.resize((int(img.width * scale), int(img.height * scale)), Image.Resampling.LANCZOS)
     return img
+
+
+def gray(content: bytes) -> Image.Image:
+    return _prep(ImageOps.exif_transpose(Image.open(io.BytesIO(content))))
 
 
 def _tesseract(img: Image.Image, psm: str, timeout: int) -> str:
@@ -60,19 +63,36 @@ def _tesseract(img: Image.Image, psm: str, timeout: int) -> str:
     return r.stdout
 
 
-# Photos of real receipts differ (lighting, background paper, tilt). Each variant
-# suits a different case; the parser's score picks the most consistent result.
-VARIANTS = (("gray", "4"), ("gray", "6"), ("binary", "6"))
-
-
 def ocr_variants(content: bytes, *, timeout: int = 90):
-    """Yield OCR texts of the image under several preprocessing/layout settings."""
+    """Yield OCR texts under several geometry/preprocessing/layout settings, most promising first.
+
+    Real phone photos differ: receipts lie crooked (→ deskew by text angle), are shot at an
+    angle (→ perspective warp of the detected paper), or sit on printed paper / uneven light
+    (→ plain gray vs. binarised). The parser's score picks the most consistent result.
+    """
+    from app.services.extraction.document_geometry import deskew, straighten
+
     if not available():
         raise LocalOcrError("tesseract is not installed")
-    g = gray(content)
-    images = {"gray": g, "binary": preprocess(content)}
-    for kind, psm in VARIANTS:
-        yield f"{kind}-psm{psm}", _tesseract(images[kind], psm, timeout)
+    original = ImageOps.exif_transpose(Image.open(io.BytesIO(content))).convert("L")
+    candidates: list[tuple[str, Image.Image, str]] = []
+    try:
+        straight = deskew(original)
+    except Exception:  # noqa: BLE001 — geometry is best-effort
+        straight = None
+    if straight is not None:
+        d = _prep(straight)
+        candidates += [("deskew", d, "6"), ("deskew", d, "4")]
+    try:
+        warped = straighten(original)
+    except Exception:  # noqa: BLE001
+        warped = None
+    if warped is not None:
+        candidates += [("warp", _prep(warped), "6")]
+    g = _prep(original)
+    candidates += [("gray", g, "4"), ("gray", g, "6"), ("binary", preprocess(content), "6")]
+    for name, img, psm in candidates:
+        yield f"{name}-psm{psm}", _tesseract(img, psm, timeout)
 
 
 def ocr_image(content: bytes, *, timeout: int = 90) -> str:

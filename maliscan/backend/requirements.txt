@@ -12,3 +12,4 @@ defusedxml==0.7.1
 python-multipart==0.0.34
 pillow==13.0.0
 httpx==0.28.1
+numpy==2.5.5

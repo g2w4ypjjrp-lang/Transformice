@@ -100,7 +100,7 @@ def _tax_number(lines: list[str]) -> str | None:
         f = fold(ln)
         for num in re.findall(r"(?<!\d)(\d{10,11})(?!\d)", ln.replace(" ", "")):
             score = 2 if (any(k in f for k in ("VKN", "V.D", "VD.", "VERGI", "TCKN", "T.C"))
-                          or re.search(r"\bVD\b", f)) else 0
+                          or re.search(r"\bVD\b|\bTC\s?:", f)) else 0
             if (len(num) == 10 and is_valid_vkn(num)) or (len(num) == 11 and is_valid_tckn(num)):
                 score += 3
             candidates.append((score - i * 0.01, num))  # earlier lines = seller
@@ -210,6 +210,11 @@ def parse_text(text: str, *, source: str) -> tuple[ExtractedDocument, list[dict]
 
     total = _labelled(lines, "GENEL TOPLAM", "ODENECEK TUTAR", "VERGILER DAHIL TOPLAM", exclude=("ARA",)) \
         or _labelled(lines, "TOPLAM", exclude=("TOPKDV", "ARA TOPLAM", "KDV TOPLAM", "MAL HIZMET", "ISKONTO"))
+    if total is None:
+        total = _labelled(lines, "NAKIT", "KREDI KART", "K.KART", exclude=("PARA USTU",))
+        if total is not None:
+            notes.append({"severity": "info", "code": "total_from_payment",
+                          "message": "Genel toplam ödeme satırından (NAKİT/KART) alındı."})
     total_vat_read = _labelled(lines, "TOPKDV", "TOP KDV", "TOPLAM KDV", "KDV TOPLAM", "HESAPLANAN KDV")
 
     # e-Arşiv style per-rate VAT: "Hesaplanan KDV(%20) 200,00"
@@ -262,6 +267,29 @@ def parse_text(text: str, *, source: str) -> tuple[ExtractedDocument, list[dict]
             total_vat = total_vat_read
             notes.append({"severity": "warning", "code": "vat_rate_unknown",
                           "message": "Toplam KDV okundu ama oranı belirlenemedi; KDV dağılımını girin."})
+
+    if not vat_breakdown and total is not None:
+        # Perspective/curl can shift a value onto a neighbouring line. Every amount printed on the
+        # receipt is a candidate: one that equals total × r/(100+r) for a legal rate r is the VAT.
+        amounts = {a for ln in lines for a in (parse_amount(t) for t in _AMOUNT.findall(ln)) if a}
+        match = None
+        for a in sorted(amounts):
+            if not (0 < a < total):
+                continue
+            for r in sorted(VALID_RATES - {0}, reverse=True):
+                if abs((total * r / (100 + r)).quantize(CENT) - a) <= CENT:
+                    match = (r, a)
+                    break
+            if match:
+                break
+        if match:
+            r, a = match
+            vat_breakdown.append({"rate": Decimal(r), "base": total - a, "amount": a})
+            total_vat = a
+            notes = [n for n in notes if n["code"] != "vat_rate_unknown"]
+            notes.append({"severity": "info", "code": "vat_matched_from_amounts",
+                          "message": f"KDV ({a}) ve oranı (%{r}) fişteki tutarların toplamla aritmetik "
+                                     "eşleşmesinden bulundu; satır hizası bozuk okunmuş olabilir."})
 
     supplier_tax = _tax_number(lines)
     doc = ExtractedDocument.model_validate({

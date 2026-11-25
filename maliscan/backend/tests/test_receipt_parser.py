@@ -126,3 +126,43 @@ def test_score_prefers_complete_consistent_parse():
     a = score(*parse_text(OCR_REAL_PHOTO_PSM4, source="ocr"))
     b = score(*parse_text(OCR_REAL_PHOTO_PSM6, source="ocr"))
     assert a > b
+
+
+# Receipt lying crooked + shot at an angle (after deskew): values shifted to neighbouring lines.
+# Fictitious name / TCKN.
+OCR_TILTED_SHIFTED = """KAPLAN AMBALAJ MALZEMELERİ
+AYŞE KAPLAN
+TC:10000000146
+KOCASİNAN VERGİ DAİRESİ
+31-10-2026
+SAAT: 19:12 FİŞ NO:0004
+AMBALAJ “020
+AKA TOPLAM “7.100,00
+“7.100,09
+KDV :
+Top N 1.183,33
+NAKİT 7.100,09"""
+
+
+def test_vat_found_by_arithmetic_when_lines_are_shifted():
+    doc, notes = parse_text(OCR_TILTED_SHIFTED, source="ocr")
+    assert doc.document_date == date(2026, 10, 31) and doc.document_number == "0004"
+    assert doc.supplier.tax_number == "10000000146" and doc.payment_method == "cash"
+    assert doc.total_amount == D("7100.00")
+    assert [(int(g.rate), g.base, g.amount) for g in doc.vat_breakdown] == [(20, D("5916.67"), D("1183.33"))]
+    assert "vat_matched_from_amounts" in {n["code"] for n in notes}
+
+
+@pytest.mark.skipif(not shutil.which("tesseract"), reason="tesseract not installed")
+@pytest.mark.parametrize("tilt", [12, -18])
+def test_real_tesseract_reads_crooked_receipt(tilt):
+    from app.services.extraction.document_geometry import skew_angle
+    from app.services.extraction.local_ocr import ocr_image
+    from PIL import Image
+    import io
+
+    photo = thermal_receipt_image(tilt=tilt)
+    assert abs(abs(skew_angle(Image.open(io.BytesIO(photo)))) - abs(tilt)) <= 2
+    doc, _ = parse_text(ocr_image(photo), source="ocr")
+    assert doc.total_amount == D("1200.00") and doc.document_date == date(2026, 11, 3)
+    assert [(int(g.rate), g.amount) for g in doc.vat_breakdown] == [(20, D("200.00"))]
