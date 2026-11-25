@@ -495,3 +495,30 @@ def delete_document(firm_id: uuid.UUID, document_id: uuid.UUID, conn: DB) -> Res
                  {"f": firm_id, "d": document_id})
     audit(conn, firm_id, "document.deleted", "document", document_id)
     return Response(status_code=204)
+
+
+class BulkDeleteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    taxpayer_id: uuid.UUID | None = None   # None → every taxpayer of the firm
+    document_ids: list[uuid.UUID] | None = Field(default=None, max_length=5000)  # None → all deletable
+
+
+@router.post("/documents/bulk-delete",
+             summary="Delete (soft) many documents; approved/exported documents are always kept")
+def bulk_delete(firm_id: uuid.UUID, body: BulkDeleteIn, conn: DB) -> dict:
+    require_firm_role(conn, firm_id, MANAGERS)
+    params = {"f": firm_id, "t": body.taxpayer_id, "ids": body.document_ids}
+    scope = """firm_id = :f AND deleted_at IS NULL
+               AND (CAST(:t AS uuid) IS NULL OR taxpayer_id = :t)
+               AND (CAST(:ids AS uuid[]) IS NULL OR id = ANY(:ids))"""
+    kept = conn.execute(text(f"SELECT count(*) FROM public.documents WHERE {scope} "
+                             "AND status IN ('approved','exported')"), params).scalar_one()
+    ids = [r[0] for r in conn.execute(text(f"""SELECT id FROM public.documents WHERE {scope}
+                                               AND status NOT IN ('approved','exported') FOR UPDATE"""), params)]
+    if ids:
+        conn.execute(text("""UPDATE public.journal_entries SET status = 'rejected' WHERE firm_id = :f
+                             AND document_id = ANY(:ids) AND status = 'draft'"""), {"f": firm_id, "ids": ids})
+        conn.execute(text("UPDATE public.documents SET deleted_at = now() WHERE firm_id = :f AND id = ANY(:ids)"),
+                     {"f": firm_id, "ids": ids})
+        audit(conn, firm_id, "document.bulk_deleted", "document", None, {"count": len(ids)})
+    return {"deleted": len(ids), "kept_locked": kept}

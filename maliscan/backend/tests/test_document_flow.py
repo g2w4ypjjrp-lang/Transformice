@@ -317,3 +317,16 @@ def test_supplier_name_remembered_by_tax_number(client, office, engine):
     ex = client.get(f"/api/v1/firms/{office['firm']}/documents/{second}", headers=office["h"]).json()["extraction"]
     assert ex["data"]["supplier"]["name"] == "Örnek Akaryakıt Ltd. Şti. (düzeltilmiş)"
     assert "supplier_name_from_history" in {i["code"] for i in ex["validation_issues"]}
+
+
+def test_bulk_delete_all_documents(client, office, engine):
+    for tilt in (2, 5):
+        assert _upload(client, office, thermal_receipt_image(tilt=tilt)).status_code == 201
+    url = f"/api/v1/firms/{office['firm']}/documents/bulk-delete"
+    assert client.post(url, headers=office["clerk"], json={}).status_code == 403
+    r = client.post(url, headers=office["h"], json={"taxpayer_id": office["tp"]})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"deleted": 2, "kept_locked": 0}
+    listed = client.get(f"/api/v1/firms/{office['firm']}/documents", headers=office["h"]).json()
+    assert listed["total"] == 0
+    assert _work(engine, firm=office["firm"]) == ["skipped", "skipped"]

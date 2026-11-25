@@ -1,13 +1,13 @@
 "use client";
 
-import { CheckCheck, FileText, Search } from "lucide-react";
+import { CheckCheck, FileText, Search, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { Alert, Badge, Button, Card, Confidence, Empty, Input, PageHeader, Select, Spinner, StatusBadge, Table, Td, Th } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { DOC_TYPE_LABELS, fmtDate, fmtMoney, STATUS_LABELS } from "@/lib/format";
-import { BOOKERS, useSession } from "@/lib/session";
+import { BOOKERS, MANAGERS, useSession } from "@/lib/session";
 import type { DocumentSummary, Taxpayer } from "@/lib/types";
 
 const PAGE = 50;
@@ -68,13 +68,34 @@ function DocumentsInner() {
     }
   }
 
+  async function deleteAll() {
+    if (!firm) return;
+    const tp = taxpayers.find((t) => t.id === taxpayer);
+    const scope = tp ? `"${tp.title}" mükellefinin` : "TÜM mükelleflerin";
+    if (!window.confirm(`${scope} bütün belgeleri silinsin mi?\n\nOnaylanmış ve Luca'ya aktarılmış belgeler yasal kayıt olduğu için silinmez. Bu işlem geri alınamaz.`)) return;
+    setBusy(true);
+    try {
+      const r = await api<{ deleted: number; kept_locked: number }>(`/firms/${firm.firm_id}/documents/bulk-delete`,
+        { method: "POST", json: { taxpayer_id: taxpayer || null } });
+      setMessage(`${r.deleted} belge silindi.${r.kept_locked ? ` ${r.kept_locked} onaylı/aktarılmış belge korundu (silmek için önce onayı geri alın).` : ""}`);
+      load();
+    } catch (e) {
+      setMessage(e instanceof ApiError ? e.message : "Silme başarısız");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!firm) return <Spinner />;
   const reviewable = data?.items.filter((d) => d.status === "needs_review") ?? [];
 
   return (
     <>
       <PageHeader title="Belgeler" subtitle={data ? `${data.total} belge` : undefined}
-        actions={can(...BOOKERS) && selected.size > 0 && <Button variant="success" loading={busy} onClick={bulkApprove}><CheckCheck className="h-4 w-4" />Seçilenleri onayla ({selected.size})</Button>} />
+        actions={<div className="flex flex-wrap gap-2">
+          {can(...BOOKERS) && selected.size > 0 && <Button variant="success" loading={busy} onClick={bulkApprove}><CheckCheck className="h-4 w-4" />Seçilenleri onayla ({selected.size})</Button>}
+          {can(...MANAGERS) && !!data?.total && <Button variant="danger" loading={busy} onClick={deleteAll}><Trash2 className="h-4 w-4" />Tüm belgeleri sil</Button>}
+        </div>} />
       {message && <div className="mb-4"><Alert tone="blue">{message}</Alert></div>}
       <Card>
         <div className="mb-4 grid gap-3 md:grid-cols-4">
