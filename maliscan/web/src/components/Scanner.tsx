@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import { api, upload } from "@/lib/api";
 import { fmtMoney } from "@/lib/format";
-import { readOnDevice, warmOcr } from "@/lib/ocr";
+import { OCR_PARALLEL, readOnDevice, warmOcr } from "@/lib/ocr";
 import { Detection, detectDocuments, StabilityTracker } from "@/lib/scanner/detect";
 import { enhance, EnhanceMode, sharpness } from "@/lib/scanner/enhance";
 import { Img, Quad, targetSize, warp } from "@/lib/scanner/geometry";
@@ -130,7 +130,7 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
       const track = stream.getVideoTracks()[0];
       const caps = (track.getCapabilities?.() ?? {}) as { torch?: boolean };
       setTorch(caps.torch ? false : null);
-      trackerRef.current = new StabilityTracker(Math.hypot(DETECT_WIDTH, DETECT_WIDTH * 0.75), 8);
+      trackerRef.current = new StabilityTracker(Math.hypot(DETECT_WIDTH, DETECT_WIDTH * 0.75), 5, 0.015, 5);
       setCamera("on");
       warmOcr();
     } catch (e) {
@@ -152,7 +152,7 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
     const v = videoRef.current;
     if (!v || busyRef.current || !v.videoWidth) return;
     // one photo per press / per document: ignore double taps and auto+manual firing together
-    if (Date.now() - lastShotRef.current < 2000) return;
+    if (Date.now() - lastShotRef.current < 1200) return;
     busyRef.current = true;
     try {
       const full = document.createElement("canvas");
@@ -259,9 +259,9 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
     return () => window.removeEventListener("beforeunload", h);
   }, [queue]);
 
-  // ---------------------------------------------------------------- on-device OCR (one at a time, parallel to camera)
+  // ---------------------------------------------------------------- on-device OCR (parallel to camera; 2 at once on fast phones)
   useEffect(() => {
-    if (queue.some((q) => q.ocr === "running")) return;
+    if (queue.filter((q) => q.ocr === "running").length >= OCR_PARALLEL) return;
     const next = queue.find((q) => q.ocr === "todo");
     if (!next) return;
     setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, ocr: "running" } : it)));
@@ -269,11 +269,11 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
       setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, ocr: "done", ocrText: text } : it))));
   }, [queue]);
 
-  // ---------------------------------------------------------------- upload queue (sequential)
+  // ---------------------------------------------------------------- upload queue (2 at a time)
   useEffect(() => {
     if (!taxpayerId) return;
     const next = queue.find((q) => q.status === "pending" && q.ocr === "done");
-    if (!next || queue.some((q) => q.status === "uploading")) return;
+    if (!next || queue.filter((q) => q.status === "uploading").length >= 2) return;
     setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, status: "uploading" } : it)));
     const form = new FormData();
     form.append("file", next.blob, next.name);
