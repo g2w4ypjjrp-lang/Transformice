@@ -39,18 +39,56 @@ def preprocess(content: bytes) -> Image.Image:
     return img
 
 
-def ocr_image(content: bytes, *, timeout: int = 90) -> str:
-    if not available():
-        raise LocalOcrError("tesseract is not installed")
+def gray(content: bytes) -> Image.Image:
+    img = ImageOps.exif_transpose(Image.open(io.BytesIO(content))).convert("L")
+    img = ImageOps.autocontrast(img, cutoff=1)
+    if img.width < TARGET_WIDTH:
+        scale = TARGET_WIDTH / img.width
+        img = img.resize((int(img.width * scale), int(img.height * scale)), Image.Resampling.LANCZOS)
+    return img
+
+
+def _tesseract(img: Image.Image, psm: str, timeout: int) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "in.png"
-        preprocess(content).save(p)
-        r = subprocess.run(["tesseract", str(p), "-", "-l", "tur", "--psm", "6",
+        img.save(p)
+        r = subprocess.run(["tesseract", str(p), "-", "-l", "tur", "--psm", psm,
                             "-c", "preserve_interword_spaces=1"],
                            capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         raise LocalOcrError("tesseract failed")
     return r.stdout
+
+
+# Photos of real receipts differ (lighting, background paper, tilt). Each variant
+# suits a different case; the parser's score picks the most consistent result.
+VARIANTS = (("gray", "4"), ("gray", "6"), ("binary", "6"))
+
+
+def ocr_variants(content: bytes, *, timeout: int = 90):
+    """Yield OCR texts of the image under several preprocessing/layout settings."""
+    if not available():
+        raise LocalOcrError("tesseract is not installed")
+    g = gray(content)
+    images = {"gray": g, "binary": preprocess(content)}
+    for kind, psm in VARIANTS:
+        yield f"{kind}-psm{psm}", _tesseract(images[kind], psm, timeout)
+
+
+def ocr_image(content: bytes, *, timeout: int = 90) -> str:
+    """OCR the image under every variant and return the text whose parse is the most
+    complete and arithmetically consistent (stops early on a perfect result)."""
+    from app.services.extraction.receipt_parser import parse_text, score
+
+    best: tuple[float, str] | None = None
+    for _name, text in ocr_variants(content, timeout=timeout):
+        doc, notes = parse_text(text, source="ocr")
+        sc = score(doc, notes)
+        if best is None or sc > best[0]:
+            best = (sc, text)
+        if sc >= 12:
+            break
+    return best[1] if best else ""
 
 
 def pdf_text(content: bytes, max_pages: int = 5) -> str:

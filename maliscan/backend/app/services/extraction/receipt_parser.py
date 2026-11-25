@@ -25,9 +25,10 @@ CENT = Decimal("0.01")
 MAX_CONFIDENCE = 0.8  # always below review_confidence_threshold (0.85) → individual review
 
 # amount with 2 decimals; tolerates OCR spaces ("272 ,50") and either separator
-_AMOUNT = re.compile(r"\*?\s*((?:\d{1,3}(?:[.,\s]\d{3})+|\d+)\s?[.,]\s?\d{2})(?!\d)")
+_D = r"[\dBOoSUD?]"
+_AMOUNT = re.compile(rf"\*?\s*((?:\d{_D}{{0,2}}(?:[.,\s]{_D}{{3}})+|\d{_D}*)\s?[.,]\s?{_D}{{2}})(?![\dA-Za-z])")
 _DATE = re.compile(r"(?<!\d)(\d{1,2})\s?[./-]\s?(\d{1,2})\s?[./-]\s?(\d{4}|\d{2})(?!\d)")
-_RATE = re.compile(r"(?:^|\s)[%“”\"'°*#]?\s?(1|8|10|18|20|0)\s*(?=\s{1,}\*?\s*\d)")
+_RATE = re.compile(r"(?:^|\s)[%“”\"'°*#x]?5?\s?(1|8|10|18|20|0)\s*(?=\s{1,}[*“\"']?\s*\d)")
 
 
 def fold(s: str) -> str:
@@ -37,8 +38,18 @@ def fold(s: str) -> str:
     return "".join(c for c in t if not unicodedata.combining(c)).replace("Ş", "S")
 
 
+_CONFUSABLE = str.maketrans({"O": "0", "o": "0", "D": "0", "U": "0", "Q": "0", "B": "8", "S": "5", "s": "5",
+                              "I": "1", "l": "1", "|": "1", "İ": "1", "Z": "2", "z": "2", "G": "6", "?": "7"})
+
+
+def fix_digits(token: str) -> str:
+    """Map OCR letter/digit confusions inside a mostly-numeric token ('95B,33' → '958,33')."""
+    digits = sum(c.isdigit() for c in token)
+    return token.translate(_CONFUSABLE) if digits >= max(1, len(token.strip()) // 2) else token
+
+
 def parse_amount(token: str) -> Decimal | None:
-    t = token.replace("*", "").replace(" ", "").replace("O", "0").replace("o", "0")
+    t = fix_digits(token.replace("*", "").replace(" ", ""))
     m = re.fullmatch(r"(\d[\d.,]*)[.,](\d{2})", t)
     if not m:
         return None
@@ -64,8 +75,15 @@ def _labelled(lines: list[str], *labels: str, exclude: tuple[str, ...] = ()) -> 
     return None
 
 
+_DATE_FUZZY = re.compile(r"(?<![\dA-Za-z])([0-9OUoIlB]{1,2})\s?[./\-—–]\s?([0-9OUoIlB]{1,2})\s?[./\-—–]\s?(20\d{2})")
+
+
 def _date(text: str) -> date | None:
-    for d, m, y in _DATE.findall(text):
+    found = _DATE.findall(text) + [(fix_digits(d + "0")[:-1] if len(d) else d, fix_digits(m + "0")[:-1], y)
+                                   for d, m, y in _DATE_FUZZY.findall(text)]
+    for d, m, y in found:
+        if not (d.isdigit() and m.isdigit()):
+            continue
         year = int(y) + (2000 if len(y) == 2 else 0)
         try:
             dt = date(year, int(m), int(d))
@@ -81,7 +99,8 @@ def _tax_number(lines: list[str]) -> str | None:
     for i, ln in enumerate(lines):
         f = fold(ln)
         for num in re.findall(r"(?<!\d)(\d{10,11})(?!\d)", ln.replace(" ", "")):
-            score = 2 if any(k in f for k in ("VKN", "V.D", "VD.", "VERGI", "TCKN", "T.C")) else 0
+            score = 2 if (any(k in f for k in ("VKN", "V.D", "VD.", "VERGI", "TCKN", "T.C"))
+                          or re.search(r"\bVD\b", f)) else 0
             if (len(num) == 10 and is_valid_vkn(num)) or (len(num) == 11 and is_valid_tckn(num)):
                 score += 3
             candidates.append((score - i * 0.01, num))  # earlier lines = seller
@@ -91,15 +110,27 @@ def _tax_number(lines: list[str]) -> str | None:
     return best[1] if best[0] >= 2 else None
 
 
+def _clean_line(ln: str) -> str:
+    """Drop OCR edge noise: short leading tokens ('NE', 'AN8', 'pM') and trailing dashes/symbols."""
+    words = ln.strip().strip("—-–_|>'\"“”").split()
+    while words and (len(words[0]) <= 3 and not re.search(r"A\.?S|LTD|STI", fold(words[0]))):
+        words = words[1:]
+    return " ".join(w for w in words if w not in ("—", "-", "–", "|")).strip(" —-–")
+
+
 def _supplier(lines: list[str]) -> str | None:
-    head = [ln.strip() for ln in lines[:8] if len(ln.strip()) >= 3]
-    for ln in head:
-        f = fold(ln)
-        if re.search(r"\b(LTD|STI|A\.S|AS\b|TIC|SAN|LIMITED|ANONIM|SIRKETI|PETROL|MARKET)", f):
+    head = [_clean_line(ln) for ln in lines[:10]]
+    company = re.compile(r"\b(LTD|STI|A\.S|AS\b|TIC|SAN|LIMITED|ANONIM|SIRKETI|PETROL|MARKET)")
+    for i, ln in enumerate(head):
+        if len(ln) >= 3 and company.search(fold(ln)):
+            prev = head[i - 1] if i > 0 else ""
+            # company names often wrap: "AKYILDIZ AMBALAJ" / "SAN.VE DIŞ TİC.LTD.ŞTİ."
+            if prev and len(prev) >= 3 and not re.search(r"\d", prev) and prev.isupper() and not company.search(fold(prev)):
+                return f"{prev} {ln}"
             return ln
     for ln in head:
         f = fold(ln)
-        if not re.search(r"\d", ln) and "FATURA" not in f and "FIS" not in f:
+        if len(ln) >= 3 and not re.search(r"\d", ln) and "FATURA" not in f and "FIS" not in f:
             return ln
     return None
 
@@ -218,10 +249,19 @@ def parse_text(text: str, *, source: str) -> tuple[ExtractedDocument, list[dict]
             base = (vat * 100 / rate).quantize(CENT) if rate else None
             vat_breakdown.append({"rate": Decimal(rate), "base": base, "amount": vat})
         total_vat = sum(vat_by_rate_read.values())
-    elif total_vat_read is not None and total is not None:
-        total_vat = total_vat_read
-        notes.append({"severity": "warning", "code": "vat_rate_unknown",
-                      "message": "Toplam KDV okundu ama oranı belirlenemedi; KDV dağılımını girin."})
+    elif total_vat_read is not None and total is not None and total > total_vat_read > 0:
+        base = total - total_vat_read
+        implied = total_vat_read * 100 / base
+        rate = min(VALID_RATES - {0}, key=lambda r: abs(r - implied))
+        if abs((base * rate / 100).quantize(CENT) - total_vat_read) <= Decimal("0.05"):
+            vat_breakdown.append({"rate": Decimal(rate), "base": base, "amount": total_vat_read})
+            total_vat = total_vat_read
+            notes.append({"severity": "info", "code": "vat_rate_from_totals",
+                          "message": f"KDV oranı TOPKDV ve TOPLAM'dan hesaplandı (%{rate})."})
+        else:
+            total_vat = total_vat_read
+            notes.append({"severity": "warning", "code": "vat_rate_unknown",
+                          "message": "Toplam KDV okundu ama oranı belirlenemedi; KDV dağılımını girin."})
 
     supplier_tax = _tax_number(lines)
     doc = ExtractedDocument.model_validate({
@@ -245,3 +285,20 @@ def parse_text(text: str, *, source: str) -> tuple[ExtractedDocument, list[dict]
     penalty = sum(1 for n in notes if n["severity"] == "warning") * 0.1
     doc.confidence = {k: (MAX_CONFIDENCE - penalty if ok else 0.0) for k, ok in found.items()}
     return doc, notes
+
+
+def score(doc: ExtractedDocument, notes: list[dict]) -> float:
+    """Higher = more complete and arithmetically consistent extraction."""
+    pts = 0.0
+    pts += 3 if doc.total_amount else 0
+    pts += 2 if doc.document_date else 0
+    pts += 2 if doc.vat_breakdown else 0
+    pts += 1 if doc.supplier.tax_number else 0
+    pts += 1 if doc.supplier.name else 0
+    pts += 0.5 if doc.document_number else 0
+    pts += 0.5 if doc.payment_method else 0
+    if doc.total_amount and doc.vat_breakdown:
+        s = sum((g.base or 0) + (g.amount or 0) for g in doc.vat_breakdown)
+        pts += 2 if abs(s - doc.total_amount) <= CENT else 0
+    pts -= sum(1.5 for n in notes if n["severity"] == "warning")
+    return pts

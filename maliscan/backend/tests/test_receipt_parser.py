@@ -78,3 +78,51 @@ def test_real_tesseract_on_synthetic_receipt_photo():
     assert doc.total_amount == D("1200.00") and doc.document_date == date(2026, 11, 3)
     assert doc.payment_method == "cash" and doc.supplier.tax_number == "9876543217"
     assert [(int(g.rate), g.base, g.amount) for g in doc.vat_breakdown] == [(20, D("1000.00"), D("200.00"))]
+
+
+# Noise patterns observed on a real phone photo (receipt lying on printed paper);
+# company name / VKN replaced with fictitious values.
+OCR_REAL_PHOTO_PSM4 = """AKYOL KUTU               —
+SAN.VE DIŞ TİC.LTD.ŞTİ.
+İKİTELLİ 3. ADA NO:2-4            —
+GÜNEŞLİ VD 1231231231           —
+TİC.SİC. NO:77618?
+Es 08-10-2026            FİŞ NO:20
+—i AMBALAJ “520          “5.750,00
+© TOPKDV               *958,33
+© TOPLAM              *5.750,00  #
+<Öİ NAKİT                 5.750,00
+Nİ EKÜNOSİ               Z NO:B20"""
+
+OCR_REAL_PHOTO_PSM6 = """NE          AKYOL KUTU          —
+SAN.VE DİŞ TİC.LTD.ŞTİ.
+AN2         GÜNEŞLİ VD 1231231231           —
+>:  UR-10-20206              FİŞ NO:20    mi
+ef  AMBALAJ  20 v7 0,00    >
+*-) TOPKDV                   *95B,33
+#&İ TOPLAM                 5.750,00
+İİ Nakir                     “5.7500U"""
+
+
+def test_real_photo_noise_patterns():
+    doc, notes = parse_text(OCR_REAL_PHOTO_PSM4, source="ocr")
+    assert doc.supplier.name == "AKYOL KUTU SAN.VE DIŞ TİC.LTD.ŞTİ."   # two wrapped lines merged
+    assert doc.supplier.tax_number == "1231231231" and doc.document_number == "20"
+    assert doc.document_date == date(2026, 10, 8) and doc.payment_method == "cash"
+    assert doc.total_amount == D("5750.00")
+    assert [(int(g.rate), g.base, g.amount) for g in doc.vat_breakdown] == [(20, D("4791.67"), D("958.33"))]
+
+
+def test_rate_derived_from_topkdv_and_total_when_items_unreadable():
+    doc, notes = parse_text(OCR_REAL_PHOTO_PSM6, source="ocr")
+    assert doc.total_amount == D("5750.00")                       # "5.750,00"
+    assert [(int(g.rate), g.amount) for g in doc.vat_breakdown] == [(20, D("958.33"))]   # "95B,33" → 958,33
+    assert "vat_rate_from_totals" in {n["code"] for n in notes}
+
+
+def test_score_prefers_complete_consistent_parse():
+    from app.services.extraction.receipt_parser import score
+
+    a = score(*parse_text(OCR_REAL_PHOTO_PSM4, source="ocr"))
+    b = score(*parse_text(OCR_REAL_PHOTO_PSM6, source="ocr"))
+    assert a > b
