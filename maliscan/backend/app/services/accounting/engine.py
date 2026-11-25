@@ -184,6 +184,11 @@ def _category_account(doc: ExtractedDocument, chart: set[str] | None) -> tuple[s
     return None
 
 
+def _rate_str(rate: Decimal) -> str:
+    """20 → '20', 1.5 → '1.5' (never scientific notation like '2E+1')."""
+    return str(int(rate)) if rate == rate.to_integral() else format(rate.normalize(), "f")
+
+
 def _vat_account(cfg: TaxpayerConfig, rate: Decimal, chart: set[str] | None, output: bool) -> str:
     key = "output_vat_accounts" if output else "input_vat_accounts"
     configured = (cfg.settings.get(key) or {}).get(str(int(rate)) if rate == rate.to_integral() else str(rate))
@@ -245,7 +250,7 @@ def generate_journal(doc: ExtractedDocument, cfg: TaxpayerConfig, *, mappings: l
         if non_deductible and not (actions.get("expense_account") or mapping):
             expense = kkeg_account
         for rate, base, amount in groups:
-            label = f"KDV %{rate.normalize()}" if rate is not None else None
+            label = f"KDV %{_rate_str(rate)}" if rate is not None else None
             if vat_deductible and amount > 0:
                 lines.append(DraftLine(expense, debit=base, description=description, vat_rate=rate, source_note=source))
                 vat_acc = actions.get("vat_account") or (mapping.vat_account_code if mapping else None) \
@@ -285,7 +290,7 @@ def generate_journal(doc: ExtractedDocument, cfg: TaxpayerConfig, *, mappings: l
             credits.append(DraftLine(income, credit=base, description=description, vat_rate=rate, source_note=source))
             if amount > 0:
                 credits.append(DraftLine(_vat_account(cfg, rate, chart, output=True), credit=amount,
-                                         description=f"Hesaplanan KDV %{rate.normalize()}", vat_rate=rate,
+                                         description=f"Hesaplanan KDV %{_rate_str(rate)}", vat_rate=rate,
                                          source_note="vat"))
         total = sum((l.credit for l in credits), Decimal(0))
         lines.append(DraftLine(recv_acc, debit=total - withholding, description=description,

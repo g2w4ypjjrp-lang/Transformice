@@ -266,6 +266,13 @@ class TestEngine:
         d = generate_journal(_doc(), CFG, chart={"770.01", "191.20", "100.01"})
         assert d.lines[0].account_code == "770.01"
 
+    def test_vat_line_labels(self):
+        d = generate_journal(_doc(supplier={"name": "Örnek Ticaret"}), CFG)
+        assert d.lines[1].description == "KDV %20"
+        s = generate_journal(_doc(document_type="e_invoice", direction="sales", payment_method=None,
+                                  buyer={"name": "Alıcı", "tax_number": SUPPLIER_VKN}), CFG)
+        assert s.lines[-1].description == "Hesaplanan KDV %20"
+
     def test_multi_vat_rates(self):
         d = generate_journal(_doc(vat_breakdown=[{"rate": 1, "base": "100", "amount": "1"},
                                                  {"rate": 10, "base": "200", "amount": "20"},
