@@ -107,6 +107,50 @@ describe("detection", () => {
   });
 });
 
+describe("detection on a light background (no dark surface)", () => {
+  /** White receipt on a white/light table: almost no brightness difference, only the text stands out. */
+  function receiptOnLightTable(angle: number, bg = 214) {
+    const img = canvas(640, 480, bg);
+    const cx = 320, cy = 240, pw = 200, ph = 380;
+    fillQuad(img, rotated(cx, cy, pw, ph, angle), 228); // paper barely brighter than the table
+    const rad = (angle * Math.PI) / 180;
+    const at = (u: number, v: number) => ({ x: cx + u * Math.cos(rad) - v * Math.sin(rad), y: cy + u * Math.sin(rad) + v * Math.cos(rad) });
+    for (let v = -ph / 2 + 18; v < ph / 2 - 18; v += 12) {           // text lines
+      for (let u = -pw / 2 + 14; u < pw / 2 - 14; u += 22) {          // words
+        const wlen = 12 + ((u * 7 + v * 3) & 7);
+        const c = at(u + wlen / 2, v);
+        fillQuad(img, rotated(c.x, c.y, wlen, 5, angle), 50);
+      }
+    }
+    return { img, paper: rotated(cx, cy, pw, ph, angle) };
+  }
+
+  it.each([0, 9, -14])("finds a receipt by its text (tilt %i°)", (angle) => {
+    const { img, paper } = receiptOnLightTable(angle);
+    const ds = detectDocuments(img, { workWidth: 200 });
+    expect(ds.length).toBe(1);
+    expect(ds[0].method).toBe("text");
+    const ratio = ds[0].areaRatio / (quadArea(paper) / (640 * 480));
+    expect(ratio).toBeGreaterThan(0.75);  // covers the text block …
+    expect(ratio).toBeLessThan(1.25);     // … without swallowing the table
+    const c = ds[0].quad.reduce((m, p) => ({ x: m.x + p.x / 4, y: m.y + p.y / 4 }), { x: 0, y: 0 });
+    expect(Math.hypot(c.x - 320, c.y - 240)).toBeLessThan(20);
+  });
+
+  it("still prefers the paper outline on a dark surface", () => {
+    const img = canvas(640, 480, 45);
+    fillQuad(img, rotated(320, 240, 220, 360, -8), 235);
+    expect(detectDocuments(img)[0].method).toBe("paper");
+  });
+
+  it("finds nothing on an empty light table or a busy texture", () => {
+    expect(detectDocuments(canvas(640, 480, 214))).toEqual([]);
+    const busy = canvas(320, 240, 200);
+    for (let i = 0; i < busy.width * busy.height; i++) if ((i * 2654435761) % 7 === 0) busy.data[i * 4] = busy.data[i * 4 + 1] = busy.data[i * 4 + 2] = 40;
+    expect(detectDocuments(busy)).toEqual([]);
+  });
+});
+
 describe("stability tracker", () => {
   const q: Quad = [{ x: 10, y: 10 }, { x: 110, y: 10 }, { x: 110, y: 210 }, { x: 10, y: 210 }];
   it("fires once after enough still frames and re-arms when the document is removed", () => {

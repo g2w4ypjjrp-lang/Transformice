@@ -336,7 +336,7 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
           {camera !== "on" && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6 text-center text-white">
               {camera === "starting" ? <Loader2 className="h-8 w-8 animate-spin" /> : <Camera className="h-10 w-10 opacity-80" />}
-              {camera === "idle" && <><p className="text-sm opacity-80">Fişi koyu bir zemine koyun ve kamerayı başlatın. Tuşa basmanız gerekmez: fiş sabit durunca otomatik çekilir, okunur ve ✓ işareti çıkar. Sonra sıradaki fişi koyun.</p>
+              {camera === "idle" && <><p className="text-sm opacity-80">Fişi herhangi bir zemine (beyaz masa da olur) koyun ve kamerayı başlatın. Tuşa basmanız gerekmez: fiş sabit durunca otomatik çekilir, okunur ve ✓ işareti çıkar. Sonra sıradaki fişi koyun.</p>
                 <Button onClick={start} disabled={!taxpayerId}>Kamerayı başlat</Button>
                 {!taxpayerId && <p className="text-xs text-amber-300">Önce mükellef seçin.</p>}</>}
               {camera === "denied" && <p className="text-sm">Kamera izni reddedildi. Tarayıcı ayarlarından izin verin veya aşağıdan dosya yükleyin.</p>}
