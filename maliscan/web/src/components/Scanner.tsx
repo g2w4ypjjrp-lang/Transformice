@@ -6,7 +6,7 @@ import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import { api, upload } from "@/lib/api";
 import { fmtMoney } from "@/lib/format";
 import { OCR_PARALLEL, readOnDevice, warmOcr } from "@/lib/ocr";
-import { Detection, detectDocuments, StabilityTracker } from "@/lib/scanner/detect";
+import { Detection, detectDocuments, lastDetectStats, StabilityTracker } from "@/lib/scanner/detect";
 import { enhance, EnhanceMode, sharpness } from "@/lib/scanner/enhance";
 import { Img, Quad, targetSize, warp } from "@/lib/scanner/geometry";
 import { Alert, Button, cn, Select } from "./ui";
@@ -92,6 +92,10 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
   const [torch, setTorch] = useState<boolean | null>(null);
   const [progress, setProgress] = useState(0);
   const [found, setFound] = useState(0);
+  // after a few seconds without a document: a hint + the frame's measurements (support can read them from a screenshot)
+  const [hint, setHint] = useState<string | null>(null);
+  const searchSinceRef = useRef(0);
+  const hintAtRef = useRef(0);
   const [flash, setFlash] = useState(false);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const autoRef = useRef(auto);
@@ -185,6 +189,15 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
       raf = requestAnimationFrame(loop);
       if (t - last < 80) return;
       last = t;
+      try {
+        frame(t);
+      } catch (e) {
+        // never die silently: show the reason (readable from a user's screenshot)
+        setFound(0);
+        setHint(`hata: ${(e as Error)?.message ?? String(e)}`.slice(0, 160));
+      }
+    };
+    const frame = (t: number) => {
       const v = videoRef.current, overlay = overlayRef.current;
       if (!v || !overlay || !v.videoWidth) return;
       const work = (workRef.current ??= document.createElement("canvas"));
@@ -194,6 +207,15 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
       const dets = detectDocuments(imageDataOf(work), { workWidth: 200 });
       detectionsRef.current = dets;
       setFound(dets.length);
+      if (dets.length) { searchSinceRef.current = 0; setHint(null); }
+      else {
+        searchSinceRef.current ||= t;
+        if (t - searchSinceRef.current > 3000 && t - hintAtRef.current > 1000 && lastDetectStats) {
+          hintAtRef.current = t;
+          const st = lastDetectStats;
+          setHint(`${v.videoWidth}×${v.videoHeight} · beyazlık ${st.centerWhite} · yazı %${(st.centerInk * 100).toFixed(1)} · satır ${st.lineStructure.toFixed(2)}`);
+        }
+      }
 
       // draw overlay in displayed-video coordinates
       const rect = v.getBoundingClientRect();
@@ -357,6 +379,11 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
               <div className="absolute left-3 top-3 rounded-full bg-black/50 px-3 py-1 text-xs text-white">
                 {found ? `${found} belge algılandı` : "Belge aranıyor…"}
               </div>
+              {!found && hint && (
+                <div className="absolute inset-x-3 top-12 rounded-xl bg-black/55 px-3 py-2 text-xs text-white">
+                  Fişi kadraja ortalayın, biraz uzaklaştırın ya da çekim tuşuna basın.
+                  <div className="mt-0.5 font-mono text-[10px] opacity-70">{hint}</div>
+                </div>)}
               {auto && progress > 0 && (
                 <div className="absolute inset-x-6 top-12 h-1 overflow-hidden rounded-full bg-white/20">
                   <div className="h-full bg-accent-500 transition-all" style={{ width: `${progress * 100}%` }} />

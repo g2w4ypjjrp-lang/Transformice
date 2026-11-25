@@ -151,6 +151,45 @@ describe("detection on a light background (no dark surface)", () => {
   });
 });
 
+describe("detection on coloured / textured tables and close-ups", () => {
+  function rgbCanvas(w: number, h: number, f: (x: number, y: number) => [number, number, number]): Img {
+    const data = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const [r, g, b] = f(x, y), o = (y * w + x) * 4;
+      data[o] = r; data[o + 1] = g; data[o + 2] = b; data[o + 3] = 255;
+    }
+    return { data, width: w, height: h };
+  }
+  // light wood: brown, with grain stripes
+  const wood = (x: number, y: number): [number, number, number] => {
+    const s = Math.sin((x + y * 0.4) / 6) * 14 + Math.sin((x - y) / 23) * 8;
+    return [190 + s, 165 + s, 128 + s];
+  };
+  const textAt = (x: number, y: number, x0: number, x1: number, y0: number, y1: number) =>
+    x > x0 && x < x1 && y > y0 && y < y1 && (y - y0) % 14 < 5 && ((x - x0) % 26) < 18;
+
+  it("finds a white receipt on light wood", () => {
+    const img = rgbCanvas(480, 640, (x, y) => {
+      if (x > 140 && x < 340 && y > 120 && y < 520) return textAt(x, y, 160, 320, 140, 500) ? [40, 40, 40] : [232, 234, 230];
+      return wood(x, y);
+    });
+    const [d] = detectDocuments(img, { workWidth: 200 });
+    expect(d?.method).toBe("paper");
+    expect(d.areaRatio).toBeGreaterThan(0.2);
+    expect(d.areaRatio).toBeLessThan(0.33);
+  });
+
+  it("does not take wood grain for a receipt", () => {
+    expect(detectDocuments(rgbCanvas(480, 640, wood), { workWidth: 200 })).toEqual([]);
+  });
+
+  it("close-up: a receipt filling the whole frame is captured as the frame", () => {
+    const img = rgbCanvas(480, 640, (x, y) => (textAt(x, y, -10, 500, -10, 660) ? [45, 45, 45] : [236, 236, 232]));
+    const [d] = detectDocuments(img, { workWidth: 200 });
+    expect(d?.method).toBe("frame");
+  });
+});
+
 describe("stability tracker", () => {
   const q: Quad = [{ x: 10, y: 10 }, { x: 110, y: 10 }, { x: 110, y: 210 }, { x: 10, y: 210 }];
   it("fires once after enough still frames and re-arms when the document is removed", () => {
