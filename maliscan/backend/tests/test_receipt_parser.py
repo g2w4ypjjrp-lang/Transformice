@@ -39,6 +39,7 @@ def test_amount_parsing_tolerates_ocr_noise():
     assert parse_amount("*1.200,00") == D("1200.00")
     assert parse_amount("1,200,00") == D("1200.00")
     assert parse_amount("272 ,50") == D("272.50")
+    assert parse_amount("1. 183,33") == D("1183.33")
     assert parse_amount("1O,00") == D("10.00")
     assert parse_amount("abc") is None
 
@@ -166,3 +167,11 @@ def test_real_tesseract_reads_crooked_receipt(tilt):
     doc, _ = parse_text(ocr_image(photo), source="ocr")
     assert doc.total_amount == D("1200.00") and doc.document_date == date(2026, 11, 3)
     assert [(int(g.rate), g.amount) for g in doc.vat_breakdown] == [(20, D("200.00"))]
+
+
+def test_vat_amount_with_ocr_space_after_thousands_dot():
+    text = OCR_TILTED_SHIFTED.replace("Top N 1.183,33", "' Top                N 1. 183,33").replace(
+        "AKA TOPLAM “7.100,00", "AKA IOPLAM      N ni Si").replace("“7.100,09\n", "")
+    doc, notes = parse_text(text.replace("NAKİT 7.100,09", "NAKİT              7.100,00"), source="ocr")
+    assert doc.total_amount == D("7100.00")
+    assert [(int(g.rate), g.amount) for g in doc.vat_breakdown] == [(20, D("1183.33"))]

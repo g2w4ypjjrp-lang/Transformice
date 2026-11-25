@@ -26,7 +26,8 @@ MAX_CONFIDENCE = 0.8  # always below review_confidence_threshold (0.85) → indi
 
 # amount with 2 decimals; tolerates OCR spaces ("272 ,50") and either separator
 _D = r"[\dBOoSUD?]"
-_AMOUNT = re.compile(rf"\*?\s*((?:\d{_D}{{0,2}}(?:[.,\s]{_D}{{3}})+|\d{_D}*)\s?[.,]\s?{_D}{{2}})(?![\dA-Za-z])")
+# group separator may be '.', ',', a space, or OCR's "dot + space" ("1. 183,33")
+_AMOUNT = re.compile(rf"\*?\s*((?:\d{_D}{{0,2}}(?:(?:[.,]\s?|\s){_D}{{3}})+|\d{_D}*)\s?[.,]\s?{_D}{{2}})(?![\dA-Za-z])")
 _DATE = re.compile(r"(?<!\d)(\d{1,2})\s?[./-]\s?(\d{1,2})\s?[./-]\s?(\d{4}|\d{2})(?!\d)")
 _RATE = re.compile(r"(?:^|\s)[%“”\"'°*#x]?5?\s?(1|8|10|18|20|0)\s*(?=\s{1,}[*“\"']?\s*\d)")
 
