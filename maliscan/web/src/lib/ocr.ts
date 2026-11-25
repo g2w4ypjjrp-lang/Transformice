@@ -11,8 +11,11 @@ import type { Scheduler } from "tesseract.js";
 let schedulerPromise: Promise<Scheduler> | null = null;
 let failed = false;
 
-/** Phones with ≥4 cores read two receipts at once (series scanning); others use one worker. */
-export const OCR_PARALLEL = typeof navigator !== "undefined" && (navigator.hardwareConcurrency ?? 2) >= 4 ? 2 : 1;
+/** Android/desktop with ≥4 cores read two receipts at once (series scanning). iPhone/iPad Safari
+ *  keeps one engine: two WebAssembly engines next to the live camera made it stutter. */
+const IS_IOS = typeof navigator !== "undefined" &&
+  (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+export const OCR_PARALLEL = typeof navigator !== "undefined" && !IS_IOS && (navigator.hardwareConcurrency ?? 2) >= 4 ? 2 : 1;
 
 function getScheduler(): Promise<Scheduler> {
   if (!schedulerPromise) {
@@ -47,7 +50,7 @@ export function warmOcr(): void {
 }
 
 /** Text of the receipt, or null when on-device OCR is unavailable / too slow. Never throws. */
-export async function readOnDevice(image: Blob, timeoutMs = 25000): Promise<string | null> {
+export async function readOnDevice(image: Blob, timeoutMs = 12000): Promise<string | null> {
   if (typeof window === "undefined" || failed || !image.type.startsWith("image/")) return null;
   try {
     const run = (async () => {

@@ -202,3 +202,14 @@ def test_receipt_number_from_real_ocr_noise(line, expected):
     from app.services.extraction.receipt_parser import _doc_number
 
     assert _doc_number([line]) == expected
+
+
+def test_early_stop_needs_date_and_total():
+    """A variant scoring 10 without a date (and a misread total) must not end the search."""
+    from app.services.extraction.local_ocr import good_enough
+    from app.services.extraction.receipt_parser import score
+
+    no_date, _ = parse_text("AKYILDIZ AMBALAJ\nGÜNEŞLİ VD 0440475233\nFİŞ NO:4\nTOPKDV *891,68\nTOPLAM *5.350,09\nNAKİT *5.350,09", source="ocr")
+    assert no_date.document_date is None and not good_enough(no_date, 11.5)
+    full, notes = parse_text(OCR_MARKET, source="ocr")
+    assert good_enough(full, score(full, notes))

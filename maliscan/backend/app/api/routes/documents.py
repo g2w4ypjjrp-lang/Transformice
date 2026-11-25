@@ -82,7 +82,7 @@ def _process_device_text(conn: Connection, firm_id, taxpayer_id, doc_id, ocr_tex
     """The phone already read the receipt: parse it now, in the upload request. Returns True when the
     result is complete (status needs_review, no server OCR needed). A partial result is saved too
     (shown at once) and the server OCR job then tries to improve it."""
-    from app.services.extraction.local_ocr import GOOD_ENOUGH
+    from app.services.extraction.local_ocr import good_enough
 
     tax = conn.execute(text("SELECT tax_number FROM public.taxpayers WHERE firm_id = :f AND id = :t"),
                        {"f": firm_id, "t": taxpayer_id}).scalar()
@@ -92,7 +92,7 @@ def _process_device_text(conn: Connection, firm_id, taxpayer_id, doc_id, ocr_tex
     save_extraction(conn, firm_id=firm_id, document_id=doc_id, doc=doc, meta=meta, created_by=None)
     can_book = conn.execute(text("SELECT app.has_firm_role(:f, ARRAY['owner','admin','accountant'])"),
                             {"f": firm_id}).scalar()
-    complete = sc >= GOOD_ENOUGH
+    complete = good_enough(doc, sc)
     if can_book:
         build_journal(conn, firm_id=firm_id, document_id=doc_id, created_by=None)
     elif complete:

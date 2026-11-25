@@ -28,6 +28,7 @@ interface QueueItem {
   ocrText?: string | null;
   /** result of server-side reading after upload */
   read?: "reading" | "ok" | "partial" | "failed";
+  readSince?: number;
   summary?: string;
 }
 
@@ -130,7 +131,7 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
       const track = stream.getVideoTracks()[0];
       const caps = (track.getCapabilities?.() ?? {}) as { torch?: boolean };
       setTorch(caps.torch ? false : null);
-      trackerRef.current = new StabilityTracker(Math.hypot(DETECT_WIDTH, DETECT_WIDTH * 0.75), 5, 0.015, 5);
+      trackerRef.current = new StabilityTracker(Math.hypot(DETECT_WIDTH, DETECT_WIDTH * 0.75), 5, 0.03, 5, 18);
       setCamera("on");
       warmOcr();
     } catch (e) {
@@ -216,7 +217,7 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
       }
       const tracker = trackerRef.current!;
       const fire = tracker.update(dets[0]?.quad ?? null);
-      setProgress(tracker.progress);
+      setProgress(Math.round(tracker.progress * 10) / 10); // fewer re-renders per second on slow phones
       if (fire && autoRef.current) void capture("auto");
     };
     raf = requestAnimationFrame(loop);
@@ -288,11 +289,19 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
         const instant = doc.status === "needs_review";
         const ok = instant && !!doc.total_amount && !!doc.document_date;
         setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, status: "done", documentId: doc.id,
-          read: instant ? (ok ? "ok" : "partial") : "reading", summary: doc.total_amount ? fmtMoney(doc.total_amount) : undefined } : it)));
+          read: instant ? (ok ? "ok" : "partial") : "reading", readSince: Date.now(), summary: doc.total_amount ? fmtMoney(doc.total_amount) : undefined } : it)));
         if (ok) celebrate(fmtMoney(doc.total_amount));
       })
       .catch((err) => setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, status: "error", error: err.message } : it))));
   }, [queue, taxpayerId, firmId, mode]);
+
+  // seconds counter for receipts still being read (never leave the user guessing)
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!queue.some((q) => q.read === "reading")) return;
+    const t = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, [queue]);
 
   // ---------------------------------------------------------------- reading result (✓ when the receipt was read)
   useEffect(() => {
@@ -403,7 +412,9 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
                 {it.status === "pending" && <p className="inline-flex items-center gap-1 text-xs text-ink-500">{!taxpayerId ? "Mükellef seçin" : it.ocr === "done" ? "Sırada" : <><Loader2 className="h-3 w-3 animate-spin" />Telefonda okunuyor…</>}</p>}
                 {it.status === "done" && <Link href={`/documents/view?id=${it.documentId}`} className={cn("inline-flex items-center gap-1 text-xs hover:underline",
                   it.read === "failed" ? "text-red-600" : it.read === "partial" ? "text-amber-700" : "text-accent-700")}>
-                  {it.read === "reading" ? <><Loader2 className="h-3 w-3 animate-spin" />Okunuyor…</>
+                  {it.read === "reading" ? (Date.now() - (it.readSince ?? Date.now()) < 30000
+                      ? <><Loader2 className="h-3 w-3 animate-spin" />Okunuyor… {Math.round((Date.now() - (it.readSince ?? Date.now())) / 1000)} sn</>
+                      : <><Loader2 className="h-3 w-3 animate-spin" />Arka planda okunuyor — siz devam edin</>)
                     : it.read === "ok" ? <><CheckCircle2 className="h-3 w-3" />Okundu ✓ {it.summary}</>
                     : it.read === "partial" ? <><AlertTriangle className="h-3 w-3" />Kısmen okundu — kontrol edin</>
                     : it.read === "failed" ? <><XCircle className="h-3 w-3" />Okunamadı — elle girin</>

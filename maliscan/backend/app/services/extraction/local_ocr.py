@@ -17,7 +17,8 @@ from pathlib import Path
 
 from PIL import Image, ImageFilter, ImageOps
 
-GOOD_ENOUGH = 10.0  # total+date+VAT consistent (9) + supplier name or VKN; max score is 12
+GOOD_ENOUGH = 11.5  # total+date+VAT consistent (9) + VKN + name (+ number or payment); max 12
+TIME_BUDGET_S = 25.0  # stop trying further variants after this (best result so far is used)
 TARGET_WIDTH = 1700  # enough for receipt fonts; keeps OCR fast on small free-tier CPUs
 
 
@@ -110,7 +111,13 @@ def ocr_variants(content: bytes, *, timeout: int = 90, upright: bool = False):
             yield f"{name}-psm{psm}", _tesseract(img, psm, timeout)
 
 
-def ocr_image(content: bytes, *, timeout: int = 90, hints=(), upright: bool = False) -> str:
+def good_enough(doc, sc: float) -> bool:
+    """Stop early only when the essentials are there: total, date and a matching VAT split."""
+    return sc >= GOOD_ENOUGH and doc.document_date is not None and doc.total_amount is not None
+
+
+def ocr_image(content: bytes, *, timeout: int = 90, hints=(), upright: bool = False,
+              budget_s: float = TIME_BUDGET_S) -> str:
     """OCR the image under every variant and return the text whose parse is the most
     complete and arithmetically consistent. Stops at the first variant that already has total,
     date, a VAT breakdown matching the total and the supplier — usually the first one, so a
@@ -123,12 +130,15 @@ def ocr_image(content: bytes, *, timeout: int = 90, hints=(), upright: bool = Fa
         yield from (("hint", h) for h in hints if h)  # e.g. text read on the phone: free to evaluate
         yield from ocr_variants(content, timeout=timeout, upright=upright)
 
+    import time
+
+    deadline = time.monotonic() + budget_s
     for _name, text in candidates():
         doc, notes = parse_text(text, source="ocr")
         sc = score(doc, notes)
         if best is None or sc > best[0]:
             best = (sc, text)
-        if sc >= GOOD_ENOUGH:
+        if good_enough(doc, sc) or time.monotonic() > deadline:
             break
     return best[1] if best else ""
 

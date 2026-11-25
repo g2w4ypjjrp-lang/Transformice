@@ -275,29 +275,36 @@ export function detectByText(gray: Uint8Array, w: number, h: number, scale: numb
 export class StabilityTracker {
   private last: Quad | null = null;
   private stableFrames = 0;
+  private seenFrames = 0;
   private absentFrames = 0;
   private armed = true;
 
   /** `rearmFrames`: the document must be out of view this many frames in a row before the next
-   *  auto-capture — a single dropped detection (hand shake, glare) must not cause a second photo. */
-  constructor(private diag: number, private needFrames = 12, private tolerance = 0.015, private rearmFrames = 8) {}
+   *  auto-capture — a single dropped detection (hand shake, glare) must not cause a second photo.
+   *  `maxWaitFrames`: a hand-held phone never holds perfectly still (and a stack of receipts has
+   *  ragged edges), so once a document has been in view this long it is captured anyway. */
+  constructor(private diag: number, private needFrames = 12, private tolerance = 0.015, private rearmFrames = 8,
+    private maxWaitFrames = Infinity) {}
 
-  /** Returns true exactly once per document placed in view and held still for `needFrames` frames. */
+  /** Returns true exactly once per document placed in view (still for `needFrames`, or in view
+   *  for `maxWaitFrames`). */
   update(quad: Quad | null): boolean {
     if (!quad) {
       this.last = null;
       this.stableFrames = 0;
+      this.seenFrames = 0;
       if (++this.absentFrames >= this.rearmFrames) this.armed = true; // document really removed
       return false;
     }
     this.absentFrames = 0;
+    this.seenFrames++;
     if (this.last) {
       const move = Math.max(...quad.map((p, i) => Math.hypot(p.x - this.last![i].x, p.y - this.last![i].y))) / this.diag;
       if (move < this.tolerance) this.stableFrames++;
       else this.stableFrames = 0;
     }
     this.last = quad;
-    if (this.armed && this.stableFrames >= this.needFrames) {
+    if (this.armed && (this.stableFrames >= this.needFrames || this.seenFrames >= this.maxWaitFrames)) {
       this.armed = false;
       this.stableFrames = 0;
       return true;
@@ -312,12 +319,14 @@ export class StabilityTracker {
   }
 
   get progress(): number {
-    return this.armed ? Math.min(1, this.stableFrames / this.needFrames) : 0;
+    if (!this.armed) return 0;
+    return Math.min(1, Math.max(this.stableFrames / this.needFrames, this.seenFrames / this.maxWaitFrames));
   }
 
   reset(): void {
     this.last = null;
     this.stableFrames = 0;
+    this.seenFrames = 0;
     this.armed = true;
   }
 }

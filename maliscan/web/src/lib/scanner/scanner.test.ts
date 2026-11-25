@@ -170,6 +170,12 @@ describe("stability tracker", () => {
     }
     expect(shots).toBe(1);
   });
+  it("captures a shaky hand-held document after the max wait", () => {
+    const t = new StabilityTracker(1000, 5, 0.015, 5, 18);
+    const shots = Array.from({ length: 30 }, (_, i) => t.update(q.map((p) => ({ x: p.x + (i % 2) * 25, y: p.y })) as Quad));
+    expect(shots.filter(Boolean).length).toBe(1);
+    expect(shots.indexOf(true)).toBe(17); // 18th frame ≈ 1.5 s at 12 fps
+  });
   it("manual capture disarms auto capture for that document", () => {
     const t = new StabilityTracker(1000, 5);
     t.disarm();
