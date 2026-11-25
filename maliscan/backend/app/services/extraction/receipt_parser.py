@@ -158,12 +158,33 @@ def _tax_office(lines: list[str]) -> str | None:
     return None
 
 
+# "FİŞ NO" as OCR really prints it: FISNO, TISNO, HSNO, FIS NO'21, FISNO©:178 … The label word is
+# one to three letters ending in S (never "Z NO" / "EKU NO" / "VKN"), junk may sit before the number.
+_FIS_NO = re.compile(r"(?<![A-Z0-9])[A-Z]{0,2}S\s?N[O0](?![A-Z])[^A-Z0-9\n]{0,4}([A-Z0-9][A-Z0-9]{0,9})")
+_INVOICE_NO = re.compile(r"(?:BELGE|FATURA)\s*(?:NO|NUMARASI)\s*[:.]?\s*([A-Z0-9][A-Z0-9\-/]{0,24})")
+_DIGITISH = set("0123456789") | {k for k in "ODUQBSIZGlo|z"}
+
+
+def _receipt_number(token: str) -> str | None:
+    """'178' → '178'; 'ZI' → '21' (OCR letters for digits); 'NAKIT' → None."""
+    if not all(c in _DIGITISH for c in token):
+        m = re.match(r"\d+", token)
+        return m.group(0) if m else None
+    digits = token.translate(_CONFUSABLE)
+    return digits if digits.isdigit() else None
+
+
 def _doc_number(lines: list[str]) -> str | None:
     for ln in lines:
         f = fold(ln)
-        m = re.search(r"(FIS|BELGE|FATURA)\s*(NO|NUMARASI)\s*[:.]?\s*([A-Z0-9][A-Z0-9\-/]{0,24})", f)
+        m = _INVOICE_NO.search(f)
+        if m and re.search(r"\d", m.group(1)):
+            return m.group(1)
+        m = _FIS_NO.search(f)
         if m:
-            return m.group(3)
+            num = _receipt_number(m.group(1))
+            if num:
+                return num
     return None
 
 

@@ -183,3 +183,22 @@ def test_supplier_name_ignores_time_lines_and_trailing_noise():
     assert doc.supplier.name == "KAPLAN AMBALAJ MALZEMELERİ"
     doc, _ = parse_text("AKYILDIZ AMBALAJ\nSAN.VE DIŞ TDS:\nGÜNEŞLİ VD 1231231231", source="ocr")
     assert doc.supplier.name == "AKYILDIZ AMBALAJ SAN.VE DIŞ"
+
+
+@pytest.mark.parametrize("line,expected", [
+    ("20-10-2026                  FİŞNO 9", "9"),
+    ("24-10-2026            TİŞNO 3", "3"),          # F read as T
+    ("O/-10- 2026                HŞNO 19", "19"),    # FİŞ read as HŞ
+    ("11-10-2026              FİŞNO©:178", "178"),   # junk before the number
+    ("21-10-2026                FİŞ NO'ZI", "21"),   # 21 read as ZI
+    ("FİŞ NO: 0042", "0042"),
+    ("FATURA NO: ABC2026000000123", "ABC2026000000123"),
+    (". 09-10-2026                > NO:", None),     # label unreadable: nothing invented
+    ("EKU NO:|J                   ZNO:153)", None),  # Z report / EKÜ numbers are not the receipt number
+    ("EKÜ NO: 0001", None),
+    ("ADRES NO 5", None),
+])
+def test_receipt_number_from_real_ocr_noise(line, expected):
+    from app.services.extraction.receipt_parser import _doc_number
+
+    assert _doc_number([line]) == expected
