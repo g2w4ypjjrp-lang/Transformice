@@ -144,3 +144,15 @@ yetkili kullanıcısı tarafından Luca arayüzünden elle yapılır. MaliScan L
 
 Ancak 3–7. adımlar başarılı olduğunda ve resmî şablon `from_official_file` ile
 yüklendiğinde şablon `verified=True` olarak işaretlenebilir.
+
+## Fatura Listesi CSV (Luca "Fatura Aktarım")
+
+Format `fatura_listesi` writes one row per approved invoice with the header taken
+byte-for-byte from a user-supplied Luca sample (`EvrakTarihi;EvrakNo;Açıklama;GenelToplam;Matrah;KDV`,
+cp1254, `;`, CRLF). Values: date dd.mm.yyyy, decimal comma, no thousands separator;
+KDV = debits on 191.*, Matrah = other debits, GenelToplam = Matrah + KDV; Açıklama =
+counterparty name. Max 400 rows per file. The user loads it via Muhasebe → Fiş İşlemleri →
+Fatura Aktarım with their own rule definition (kural tanımlama), which assigns the account codes.
+**UNVERIFIED**: the sample had a header only, so date/number formatting is an assumption until a
+real import succeeds. Direct automatic transfer is not offered: Luca has no public API and
+MaliScan never stores Luca credentials or automates the Luca web UI.

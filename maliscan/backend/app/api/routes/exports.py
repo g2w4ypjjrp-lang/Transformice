@@ -25,7 +25,7 @@ class ExportIn(BaseModel):
     all_approved: bool = False
     date_from: date | None = None
     date_to: date | None = None
-    format: Literal["csv", "xlsx"] = "csv"
+    format: Literal["csv", "xlsx", "fatura_listesi"] = "csv"
     encoding: Literal["cp1254", "utf-8-sig"] = "cp1254"
     allowed_duplicate_ids: list[uuid.UUID] = Field(default_factory=list)
 
@@ -43,7 +43,7 @@ def create_export(firm_id: uuid.UUID, taxpayer_id: uuid.UUID, body: ExportIn, co
         {"f": firm_id, "t": taxpayer_id, "df": body.date_from, "dt": body.date_to})]
     if not ids:
         raise ApiError(422, "nothing_to_export", "no approved journal entries match")
-    service = LucaExportService(options=ExportOptions(fmt=body.format, encoding=body.encoding))
+    service = LucaExportService(options=ExportOptions(fmt=body.format, encoding="cp1254" if body.format == "fatura_listesi" else body.encoding))
     try:
         job_id, result = export_journal_entries(
             conn, firm_id=firm_id, taxpayer_id=taxpayer_id, entry_ids=ids, service=service,

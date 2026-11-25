@@ -34,6 +34,7 @@ class ExportStorage(Protocol):
 
 _CONTENT_TYPES = {
     "csv": "text/csv",
+    "fatura_listesi": "text/csv",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 

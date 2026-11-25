@@ -68,7 +68,7 @@ export default function ExportsPage() {
             <Field label="Mükellef"><Select value={form.taxpayer} onChange={(e) => setForm({ ...form, taxpayer: e.target.value })}><option value="">Seçin…</option>{taxpayers.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</Select></Field>
             <Field label="Başlangıç tarihi"><Input type="date" value={form.date_from} onChange={(e) => setForm({ ...form, date_from: e.target.value })} /></Field>
             <Field label="Bitiş tarihi"><Input type="date" value={form.date_to} onChange={(e) => setForm({ ...form, date_to: e.target.value })} /></Field>
-            <Field label="Biçim"><Select value={form.format} onChange={(e) => setForm({ ...form, format: e.target.value })}><option value="csv">CSV (; ayraçlı)</option><option value="xlsx">Excel (.xlsx)</option></Select></Field>
+            <Field label="Biçim"><Select value={form.format} onChange={(e) => setForm({ ...form, format: e.target.value })}><option value="csv">CSV (; ayraçlı)</option><option value="xlsx">Excel (.xlsx)</option><option value="fatura_listesi">Luca Fatura Listesi (EvrakTarihi;EvrakNo;Açıklama;GenelToplam;Matrah;KDV)</option></Select></Field>
             <Field label="Karakter kodlaması"><Select value={form.encoding} disabled={form.format !== "csv"} onChange={(e) => setForm({ ...form, encoding: e.target.value })}><option value="cp1254">Windows-1254 (Türkçe)</option><option value="utf-8-sig">UTF-8</option></Select></Field>
           </div>
           <div className="mt-4 flex items-center gap-3">
@@ -88,7 +88,7 @@ export default function ExportsPage() {
                 {f.download_url && <a href={f.download_url}><Button size="sm" variant="secondary"><Download className="h-4 w-4" />İndir</Button></a>}
               </li>))}
           </ul>
-          <p className="mt-3 text-xs text-ink-500">Luca: Muhasebe → Fiş İşlemleri → Excel Veri Aktarımı → Ayraç &quot;; (Türkçe)&quot; → Dosya Seç → Yükle → Fiş Kes. İndirme bağlantıları birkaç dakika geçerlidir.</p>
+          <p className="mt-3 text-xs text-ink-500">{result.files.some((f) => f.filename.startsWith("luca_fatura_listesi")) ? <>Luca: Muhasebe → Fiş İşlemleri → Fatura Aktarım → kural tanımlamanızı seçin → CSV dosyasını yükleyin (dosya başına en fazla 400 satır).</> : <>Luca: Muhasebe → Fiş İşlemleri → Excel Veri Aktarımı → Ayraç &quot;; (Türkçe)&quot; → Dosya Seç → Yükle → Fiş Kes.</>} İndirme bağlantıları birkaç dakika geçerlidir.</p>
         </Card>
       )}
       <Card title="Aktarım geçmişi">

@@ -28,7 +28,12 @@ from app.services.luca.models import ExportFile, ExportResult, Issue, Voucher
 from app.services.luca.template import LUCA_FIS_AKTARIM_2020_EVIDENCE, LucaTemplate
 from app.services.luca.validation import validate_vouchers
 
-Format = Literal["csv", "xlsx"]
+Format = Literal["csv", "xlsx", "fatura_listesi"]
+
+# Header of the user's own Luca "Fatura Aktarım" sample file (luca_gider_fatura_listesi.csv),
+# reproduced byte-for-byte in cp1254. One row per invoice; Luca's screen takes ≤400 rows.
+FATURA_LISTESI_HEADERS = ["EvrakTarihi", "EvrakNo", "Açıklama", "GenelToplam", "Matrah", "KDV"]
+FATURA_LISTESI_MAX_ROWS = 400
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
@@ -86,11 +91,13 @@ class LucaExportService:
 
     def split(self, vouchers: list[Voucher]) -> list[list[Voucher]]:
         """Chunks of ≤ max_vouchers_per_file; a voucher is never split across files."""
-        size = self.template.max_vouchers_per_file
+        size = FATURA_LISTESI_MAX_ROWS if self.options.fmt == "fatura_listesi" else self.template.max_vouchers_per_file
         return [vouchers[i:i + size] for i in range(0, len(vouchers), size)]
 
     # ------------------------------------------------------------------ building
     def _build_file(self, index: int, chunk: list[Voucher], issues: list[Issue]) -> ExportFile:
+        if self.options.fmt == "fatura_listesi":
+            return self._build_fatura_listesi(index, chunk, issues)
         rows: list[list[object]] = []
         voucher_map: dict[str, str] = {}
         for seq, v in enumerate(chunk, start=1):
@@ -134,6 +141,33 @@ class LucaExportService:
             total_credit=total_c,
         )
 
+    def _build_fatura_listesi(self, index: int, chunk: list[Voucher], issues: list[Issue]) -> ExportFile:
+        """One row per invoice, figures taken from the approved journal:
+        KDV = debits on 191 (İndirilecek KDV), Matrah = other debits, GenelToplam = Matrah + KDV."""
+        t = self.template
+        buf = io.StringIO()
+        writer = csv.writer(buf, delimiter=";", lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(FATURA_LISTESI_HEADERS)
+        voucher_map: dict[str, str] = {}
+        for seq, v in enumerate(chunk, start=1):
+            voucher_map[str(seq)] = str(v.source_id)
+            kdv = sum((ln.debit for ln in v.lines if ln.account_code.startswith("191")), Decimal("0"))
+            matrah = v.total_debit - kdv
+            writer.writerow([
+                (v.document_date or v.voucher_date).strftime(t.date_format),
+                self._text(v.document_number, v, issues) or "",
+                self._text(_supplier_label(v), v, issues) or "",
+                _fmt_decimal(matrah + kdv, 2, t.decimal_separator, ""),
+                _fmt_decimal(matrah, 2, t.decimal_separator, ""),
+                _fmt_decimal(kdv, 2, t.decimal_separator, ""),
+            ])
+        content = self._encode(buf.getvalue(), issues)
+        total = sum((v.total_debit for v in chunk), Decimal("0"))
+        return ExportFile(
+            file_index=index, filename=f"luca_fatura_listesi_{index:03d}.csv", content=content,
+            sha256=hashlib.sha256(content).hexdigest(), voucher_count=len(chunk), row_count=len(chunk),
+            voucher_map=voucher_map, total_debit=total, total_credit=total)
+
     def _text(self, value: str | None, v: Voucher, issues: list[Issue]) -> str | None:
         if value is None:
             return None
@@ -176,7 +210,9 @@ class LucaExportService:
         kinds = [c.kind for c in self.template.columns]
         for row in rows:
             writer.writerow([self._format_cell(k, v) for k, v in zip(kinds, row)])
-        text = buf.getvalue()
+        return self._encode(buf.getvalue(), issues)
+
+    def _encode(self, text: str, issues: list[Issue]) -> bytes:
         enc = self.options.encoding
         try:
             return text.encode(enc)
@@ -229,6 +265,14 @@ def _fmt_decimal(value: Decimal, places: int | None, dec_sep: str, thou_sep: str
             whole = whole[:-3]
         whole = thou_sep.join([whole, *groups])
     return sign + whole + (dec_sep + frac if frac else "")
+
+
+def _supplier_label(v: Voucher) -> str | None:
+    """Journal description is 'SUPPLIER - DOCNO'; the invoice list wants just the counterparty."""
+    desc = (v.description or "").strip()
+    if v.document_number and desc.endswith(f" - {v.document_number}"):
+        desc = desc[: -len(f" - {v.document_number}")].strip()
+    return desc or None
 
 
 def _encodable(ch: str, enc: str) -> bool:
