@@ -29,7 +29,7 @@ function TaxpayersInner() {
     setError(null);
     try {
       const tp = await api<Taxpayer>(`/firms/${firm.firm_id}/taxpayers`, { method: "POST", json: { ...form, tax_office: form.tax_office || null } });
-      router.push(`/taxpayers/${tp.id}${tp.warnings?.length ? "?warn=vkn" : ""}`);
+      router.push(`/taxpayers/view?id=${tp.id}${tp.warnings?.length ? "&warn=vkn" : ""}`);
     } catch (e) {
       setError(e instanceof ApiError ? (e.code === "validation_error" ? "Vergi numarasını kontrol edin (VKN 10, TCKN 11 hane)." : e.message) : "Kaydedilemedi");
     } finally {
@@ -46,8 +46,8 @@ function TaxpayersInner() {
         {list.length === 0 ? <Empty icon={<Users className="h-5 w-5" />} title="Henüz mükellef eklenmedi" text="Belgeler mükellef bazında işlenir. İlk mükellefinizi ekleyin; standart hesap planı otomatik oluşturulur." /> : (
           <Table head={<><Th>Unvan</Th><Th>VKN/TCKN</Th><Th>Defter</Th><Th>Varsayılan ödeme</Th><Th className="text-right">Belge</Th><Th className="text-right">İnceleme</Th></>}>
             {list.map((t) => (
-              <tr key={t.id} className="cursor-pointer hover:bg-slate-50" onClick={() => router.push(`/taxpayers/${t.id}`)}>
-                <Td><Link href={`/taxpayers/${t.id}`} className="font-medium text-ink-900">{t.title}</Link></Td>
+              <tr key={t.id} className="cursor-pointer hover:bg-slate-50" onClick={() => router.push(`/taxpayers/view?id=${t.id}`)}>
+                <Td><Link href={`/taxpayers/view?id=${t.id}`} className="font-medium text-ink-900">{t.title}</Link></Td>
                 <Td className="font-mono text-xs">{t.tax_number}</Td>
                 <Td>{t.bookkeeping_basis === "balance_sheet" ? "Bilanço" : "İşletme"}</Td>
                 <Td>{{ cash: "Nakit", bank: "Banka", credit_card: "Kredi kartı", supplier_credit: "Cari" }[t.default_payment_method]}</Td>

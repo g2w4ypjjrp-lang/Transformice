@@ -314,7 +314,7 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
                 <p className="truncate text-xs font-medium">{it.name}</p>
                 {it.status === "uploading" && <div className="mt-1 h-1 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-brand-500" style={{ width: `${it.progress * 100}%` }} /></div>}
                 {it.status === "pending" && <p className="text-xs text-ink-500">{taxpayerId ? "Sırada" : "Mükellef seçin"}</p>}
-                {it.status === "done" && <Link href={`/documents/${it.documentId}`} className="inline-flex items-center gap-1 text-xs text-accent-700 hover:underline"><CheckCircle2 className="h-3 w-3" />Yüklendi — işleniyor</Link>}
+                {it.status === "done" && <Link href={`/documents/view?id=${it.documentId}`} className="inline-flex items-center gap-1 text-xs text-accent-700 hover:underline"><CheckCircle2 className="h-3 w-3" />Yüklendi — işleniyor</Link>}
                 {it.status === "error" && <p className="text-xs text-red-600">{it.error}</p>}
                 {it.blurry && it.status !== "error" && <p className="inline-flex items-center gap-1 text-xs text-amber-700"><AlertTriangle className="h-3 w-3" />Görüntü bulanık olabilir</p>}
               </div>

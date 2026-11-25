@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import signal
+import threading
 import time
 import uuid
 from datetime import timedelta
@@ -90,28 +91,33 @@ def run_job(job: dict, *, engine: Engine, storage: Storage, settings: Settings,
         return status
 
 
-def main() -> None:
-    settings = get_settings()
-    configure_logging(settings.log_level)
+def run_loop(stop: "threading.Event", *, settings: Settings | None = None) -> None:
+    """Poll-and-process loop; used by the standalone worker and the API's embedded worker."""
+    settings = settings or get_settings()
     engine, storage = get_engine(), get_storage()
     worker_id = f"{settings.worker_id}-{uuid.uuid4().hex[:6]}"
-    stop = {"flag": False}
-    signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
-    signal.signal(signal.SIGINT, lambda *_: stop.update(flag=True))
     log.info("worker started", extra={"event": "worker.started"})
-    while not stop["flag"]:
-        job = None
+    while not stop.is_set():
         try:
             job = claim_job(engine, worker_id)
         except Exception:  # noqa: BLE001 — DB hiccup: back off
             log.exception("claim failed")
-            time.sleep(5)
+            stop.wait(5)
             continue
         if job is None:
-            time.sleep(settings.worker_poll_seconds)
+            stop.wait(settings.worker_poll_seconds)
             continue
         run_job(job, engine=engine, storage=storage, settings=settings)
     log.info("worker stopped", extra={"event": "worker.stopped"})
+
+
+def main() -> None:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    run_loop(stop, settings=settings)
 
 
 if __name__ == "__main__":

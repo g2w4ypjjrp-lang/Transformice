@@ -132,6 +132,15 @@ class SupabaseStorage:
         self._check(self.client.request("DELETE", f"{self.base}/object/{bucket}", headers=self.headers,
                                         json={"prefixes": [path]}))
 
+    def ensure_buckets(self, names: list[str]) -> None:
+        """Create missing buckets as PRIVATE (idempotent)."""
+        r = self._check(self.client.get(f"{self.base}/bucket", headers=self.headers))
+        existing = {b.get("id") or b.get("name") for b in r.json()}
+        for name in names:
+            if name not in existing:
+                self._check(self.client.post(f"{self.base}/bucket", headers=self.headers,
+                                             json={"id": name, "name": name, "public": False}))
+
     def signed_url(self, bucket: str, path: str, *, download_name: str | None = None) -> str:
         body: dict = {"expiresIn": self.ttl}
         r = self._check(self.client.post(self._url("sign/", bucket, path), headers=self.headers, json=body))

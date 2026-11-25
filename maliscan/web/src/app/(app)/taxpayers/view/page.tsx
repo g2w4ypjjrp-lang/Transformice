@@ -2,7 +2,7 @@
 
 import { ArrowLeft, Plus, Trash2, Upload } from "lucide-react";
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { ChangeEvent, Suspense, useCallback, useEffect, useState } from "react";
 import { Alert, Badge, Button, Card, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, cn } from "@/components/ui";
 import { api, ApiError, upload } from "@/lib/api";
@@ -21,8 +21,8 @@ const DEFAULTS: [keyof Taxpayer, string][] = [
 ];
 
 function TaxpayerInner() {
-  const { id } = useParams<{ id: string }>();
   const params = useSearchParams();
+  const id = params.get("id") ?? "";
   const { firm, can } = useSession();
   const [tp, setTp] = useState<Taxpayer | null>(null);
   const [tab, setTab] = useState<"settings" | "accounts" | "mappings" | "rules">("settings");

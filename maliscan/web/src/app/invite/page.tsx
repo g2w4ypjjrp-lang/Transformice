@@ -1,13 +1,17 @@
 "use client";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 import { Alert, Button, Spinner } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { useSession } from "@/lib/session";
 
 export default function InvitePage() {
-  const { token } = useParams<{ token: string }>();
+  return <Suspense fallback={<Spinner />}><Invite /></Suspense>;
+}
+
+function Invite() {
+  const token = useSearchParams().get("token") ?? "";
   const { session, loading, refreshMe, setFirmId } = useSession();
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +39,7 @@ export default function InvitePage() {
           <Button onClick={accept} loading={busy} className="w-full">Daveti kabul et</Button>
         ) : (
           <p className="text-sm text-ink-700">Daveti kabul etmek için davet edilen e-posta ile{" "}
-            <Link className="text-brand-600 hover:underline" href={`/login?next=/invite/${token}`}>giriş yapın</Link> veya{" "}
+            <Link className="text-brand-600 hover:underline" href={`/login?next=${encodeURIComponent(`/invite?token=${token}`)}`}>giriş yapın</Link> veya{" "}
             <Link className="text-brand-600 hover:underline" href="/register">hesap oluşturun</Link>.</p>
         )}
       </div>

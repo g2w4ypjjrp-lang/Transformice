@@ -78,7 +78,7 @@ def create_invitation(firm_id: uuid.UUID, body: InvitationCreate, conn: DB) -> I
     ).mappings().one()
     audit(conn, firm_id, "invitation.created", "invitation", row["id"], {"role": body.role})
     base = get_settings().public_app_url.rstrip("/")
-    return InvitationCreated(**row, token=token, accept_url=f"{base}/invite/{token}")
+    return InvitationCreated(**row, token=token, accept_url=f"{base}/invite?token={token}")
 
 
 @router.get("/firms/{firm_id}/invitations", response_model=list[InvitationOut], summary="Invitations (owner/admin)")

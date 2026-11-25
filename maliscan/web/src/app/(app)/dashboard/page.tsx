@@ -101,7 +101,7 @@ export default function DashboardPage() {
           <Table head={<><Th>Mükellef</Th><Th className="text-right">Belge</Th><Th className="text-right">İnceleme</Th><Th className="text-right">Aktarıma hazır</Th><Th className="text-right">Hata</Th><Th>Son yükleme</Th></>}>
             {data.taxpayers.map((tp) => (
               <tr key={tp.id} className="hover:bg-slate-50">
-                <Td><Link href={`/taxpayers/${tp.id}`} className="font-medium text-ink-900 hover:text-brand-700">{tp.title}</Link></Td>
+                <Td><Link href={`/taxpayers/view?id=${tp.id}`} className="font-medium text-ink-900 hover:text-brand-700">{tp.title}</Link></Td>
                 <Td className="text-right tabular-nums">{tp.documents}</Td>
                 <Td className="text-right">{tp.pending ? <Link href={`/documents?taxpayer=${tp.id}&status=needs_review`}><Badge tone="amber">{tp.pending}</Badge></Link> : 0}</Td>
                 <Td className="text-right">{tp.ready_to_export ? <Badge tone="green">{tp.ready_to_export}</Badge> : 0}</Td>

@@ -236,3 +236,26 @@ def test_super_admin_endpoints(client, office, make_user, auth_headers, engine):
     assert isinstance(client.get("/api/v1/admin/jobs", headers=admin).json(), list)
     logs = client.get("/api/v1/admin/audit-logs", headers=admin).json()
     assert {"admin.firm_status", "admin.plan_saved"} <= {l["action"] for l in logs}
+
+
+def test_free_mode_without_ai_key_goes_to_manual_review(client, office, engine):
+    """No ANTHROPIC_API_KEY: the document is not failed; it waits for manual entry,
+    and saving the corrected data produces a balanced draft journal."""
+    doc_id = _upload(client, office, thermal_receipt_image(tilt=5)).json()["id"]
+    settings = get_settings()
+    assert settings.anthropic_api_key is None
+    while (job := claim_job(engine, "free-worker", office["firm"])) is not None:
+        assert run_job(job, engine=engine, storage=get_storage(), settings=settings) == "succeeded"
+    base = f"/api/v1/firms/{office['firm']}/documents/{doc_id}"
+    d = client.get(base, headers=office["h"]).json()
+    assert d["document"]["status"] == "needs_review"
+    assert d["extraction"]["validation_issues"][0]["code"] == "manual_entry_required"
+    assert d["journal"] is None
+    data = d["extraction"]["data"]
+    data.update(document_date="2026-11-03", total_amount="1200.00", payment_method="cash",
+                supplier={"name": "Örnek Akaryakıt", "tax_number": None, "tax_office": None, "address": None},
+                vat_breakdown=[{"rate": "20", "base": "1000.00", "amount": "200.00"}])
+    r = client.put(f"{base}/extraction", headers=office["h"], json=data)
+    assert r.status_code == 200, r.text
+    j = r.json()["journal"]
+    assert j and str(j["total_debit"]) in ("1200.00", "1200")

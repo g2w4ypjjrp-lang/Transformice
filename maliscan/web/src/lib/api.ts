@@ -9,6 +9,11 @@ export class ApiError extends Error {
   }
 }
 
+/** Free hosting sleeps after inactivity: fire a cheap request on app start so it wakes early. */
+export function wakeApi(): void {
+  fetch(API_URL + "/health", { cache: "no-store" }).catch(() => undefined);
+}
+
 async function token(): Promise<string | null> {
   const { data } = await supabase().auth.getSession();
   return data.session?.access_token ?? null;
@@ -23,7 +28,19 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
     headers.set("Content-Type", "application/json");
     body = JSON.stringify(init.json);
   }
-  const res = await fetch(API_URL + path, { ...init, headers, body, cache: "no-store" });
+  let res: Response | null = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      res = await fetch(API_URL + path, { ...init, headers, body, cache: "no-store" });
+      if (![502, 503, 504].includes(res.status) || init.method && init.method !== "GET") break;
+    } catch (e) {
+      if (attempt === 3 || (init.method && init.method !== "GET")) {
+        throw new ApiError(0, "network", "Sunucuya ulaşılamadı. Sunucu uyanıyor olabilir — birkaç saniye sonra tekrar deneyin.");
+      }
+    }
+    await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+  }
+  if (!res) throw new ApiError(0, "network", "Sunucuya ulaşılamadı.");
   if (res.status === 204) return undefined as T;
   const payload = await res.json().catch(() => null);
   if (!res.ok) {

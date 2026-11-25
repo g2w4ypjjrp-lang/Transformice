@@ -2,8 +2,8 @@
 
 import { AlertTriangle, ArrowLeft, Check, ChevronRight, Info, Plus, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Badge, Button, Card, Confidence, Field, Input, Modal, Select, Spinner, StatusBadge, cn } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import { DOC_TYPE_LABELS, fmtDate, fmtDateTime, fmtMoney, parseAmount } from "@/lib/format";
@@ -34,8 +34,12 @@ interface Detail {
 const SOURCE: Record<string, string> = { ubl_xml: "e-Fatura XML (kaynak veri)", ocr_ai: "Yapay zekâ ile okundu", manual: "Elle düzeltildi", pdf_text: "PDF metni" };
 const ACTIONS: Record<string, string> = { approve: "Onayladı", reject: "Reddetti", reopen: "Yeniden açtı", correct: "Veriyi düzeltti" };
 
-export default function DocumentReview() {
-  const { id } = useParams<{ id: string }>();
+export default function DocumentReviewPage() {
+  return <Suspense fallback={<Spinner />}><DocumentReview /></Suspense>;
+}
+
+function DocumentReview() {
+  const id = useSearchParams().get("id") ?? "";
   const { firm, can } = useSession();
   const router = useRouter();
   const [d, setD] = useState<Detail | null>(null);
@@ -90,7 +94,7 @@ export default function DocumentReview() {
     if (!firm || !d) return;
     const r = await api<{ items: { id: string }[] }>(`/firms/${firm.firm_id}/documents?status=needs_review&taxpayer_id=${d.document.taxpayer_id}&limit=5`);
     const next = r.items.find((x) => x.id !== id);
-    router.push(next ? `/documents/${next.id}` : "/documents?status=needs_review");
+    router.push(next ? `/documents/view?id=${next.id}` : "/documents?status=needs_review");
   }
 
   if (error && !d) return <Alert>{error}</Alert>;
@@ -111,7 +115,7 @@ export default function DocumentReview() {
           <div>
             <h1 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
               {form?.supplier.name || doc.original_filename || "Belge"} <StatusBadge status={doc.status} />
-              {doc.duplicate_of && <Link href={`/documents/${doc.duplicate_of}`}><Badge tone="amber">Olası mükerrer →</Badge></Link>}
+              {doc.duplicate_of && <Link href={`/documents/view?id=${doc.duplicate_of}`}><Badge tone="amber">Olası mükerrer →</Badge></Link>}
             </h1>
             <p className="text-sm text-ink-500">{doc.document_type ? DOC_TYPE_LABELS[doc.document_type] : doc.file_kind.toUpperCase()} · yüklendi {fmtDateTime(doc.created_at)}{ex && <> · {SOURCE[ex.source] ?? ex.source}</>}</p>
           </div>

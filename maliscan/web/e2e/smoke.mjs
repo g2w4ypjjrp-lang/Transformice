@@ -23,6 +23,15 @@ page.on("console", (m) => m.type() === "error" && !m.text().includes("favicon") 
 const shot = (n) => page.screenshot({ path: `${SHOTS}/${n}.png`, fullPage: true });
 const step = (s) => console.log("✓", s);
 
+await page.goto(`${BASE}/`);
+await page.waitForSelector("text=Uygulamayı indirin");
+await shot("00-landing");
+await page.goto(`${BASE}/indir`);
+await page.getByRole("button", { name: "iPhone / iPad" }).click();
+await page.waitForSelector("text=Ana Ekrana Ekle");
+await shot("00-download");
+step("landing + download page");
+
 const email = `e2e-${Date.now()}@example.com`;
 await page.goto(`${BASE}/register`);
 await page.getByLabel("Ad soyad").fill("Ayşe Yılmaz");
@@ -37,18 +46,18 @@ await page.goto(`${BASE}/login`);
 await page.getByLabel("E-posta").fill(email);
 await page.getByLabel("Şifre").fill("CokGizliSifre123");
 await page.getByRole("button", { name: "Giriş yap" }).click();
-await page.waitForURL("**/onboarding");
+await page.waitForURL(/\/onboarding\/?$/);
 await shot("01-onboarding");
 await page.getByLabel("Ofis adı").fill("Yıldız Mali Müşavirlik");
 await page.getByRole("button", { name: /Ofisi oluştur/ }).click();
-await page.waitForURL("**/taxpayers**");
+await page.waitForURL(/\/taxpayers/);
 step("login + firm created");
 
 await page.getByLabel("VKN", { exact: true }).fill("1231231233");
 await page.getByLabel("Unvan / ad soyad").fill("Deneme Mükellef Ltd. Şti.");
 await shot("02-new-taxpayer");
 await page.getByRole("button", { name: "Kaydet" }).click();
-await page.waitForURL("**/taxpayers/**");
+await page.waitForURL(/\/taxpayers\/view/);
 await page.waitForSelector("text=Varsayılan hesaplar");
 await shot("03-taxpayer-settings");
 await page.getByRole("button", { name: /Hesap planı/ }).click();

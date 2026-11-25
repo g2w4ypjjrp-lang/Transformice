@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     # ---- Worker -------------------------------------------------------------------
     worker_poll_seconds: float = 2.0
     worker_id: str = "worker-1"
+    # Free hosting (single instance): run the job worker inside the API process
+    # and apply migrations on startup.
+    embedded_worker: bool = False
+    run_migrations_on_startup: bool = False
 
     @model_validator(mode="after")
     def _check_auth_config(self) -> "Settings":

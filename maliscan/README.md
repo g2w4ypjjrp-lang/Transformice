@@ -89,18 +89,20 @@ With a real Supabase project, point `NEXT_PUBLIC_SUPABASE_URL`/`SUPABASE_URL` at
 
 | Suite | Command | Result (2026-11-24) |
 |---|---|---|
-| Backend (migrations, RLS/tenant isolation, roles, accounting invariants, auth, API, masterdata, plan limits, UBL, validation, Claude extractor (fake client), OCR, storage, engine, full document flow, Luca export, admin, retention) | `cd backend && pytest` | **181 passed** |
+| Backend (migrations, RLS/tenant isolation, roles, accounting invariants, auth, API, masterdata, plan limits, UBL, validation, Claude extractor (fake client), OCR, storage, engine, full document flow, Luca export, admin, retention) | `cd backend && pytest` | **184 passed** |
 | Scanner library (geometry, detection, multi-receipt, stability, enhancement) | `cd web && npm test` | **11 passed** |
 | Type check / lint / production build | `npm run typecheck && npm run lint && npm run build` | clean |
-| Browser E2E (register → office → taxpayer → **live camera auto-capture** → review → approve → Luca export → dashboard → mobile) | `node web/e2e/smoke.mjs` with the stack running | **passed** |
+| Browser E2E on the static (Cloudflare-style) build (landing/download page → register → office → taxpayer → **live camera auto-capture** → review → approve → Luca export → dashboard → mobile) | `node web/e2e/smoke.mjs` with the stack running | **passed** |
 | Docker images, container smoke test, nginx config test | see docs/DEPLOYMENT.md | passed |
 | Backup → restore drill | see docs/BACKUP_RECOVERY.md | passed (byte-identical) |
 
 ## Documentation
 
+* **[Ücretsiz kurulum (VPS'siz): Cloudflare Pages + Render + Supabase → luca.canarslan.net.tr](docs/UCRETSIZ_KURULUM.md)**
+
 * [Implementation plan & architecture](docs/IMPLEMENTATION_PLAN.md)
 * [API reference](docs/API.md) · [openapi.json](docs/openapi.json)
 * [Luca integration research & pilot protocol](docs/LUCA_INTEGRATION.md)
-* [VPS deployment](docs/DEPLOYMENT.md)
+* [VPS deployment (alternative)](docs/DEPLOYMENT.md)
 * [Backup & recovery](docs/BACKUP_RECOVERY.md)
 * [Security, KVKK & retention](docs/SECURITY_KVKK.md)

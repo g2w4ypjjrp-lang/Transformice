@@ -100,7 +100,7 @@ function DocumentsInner() {
               onChange={(e) => setSelected(e.target.checked ? new Set(reviewable.map((d) => d.id)) : new Set())} /></Th>}
             <Th>Tarih</Th><Th>Satıcı / Alıcı</Th><Th>Belge</Th><Th>Mükellef</Th><Th className="text-right">Tutar</Th><Th>Güven</Th><Th>Durum</Th></>}>
             {data.items.map((d) => (
-              <tr key={d.id} className="cursor-pointer hover:bg-slate-50" onClick={() => router.push(`/documents/${d.id}`)}>
+              <tr key={d.id} className="cursor-pointer hover:bg-slate-50" onClick={() => router.push(`/documents/view?id=${d.id}`)}>
                 {can(...BOOKERS) && <Td><input type="checkbox" disabled={d.status !== "needs_review"} checked={selected.has(d.id)} onClick={(e) => e.stopPropagation()}
                   onChange={(e) => { const s = new Set(selected); e.target.checked ? s.add(d.id) : s.delete(d.id); setSelected(s); }} /></Td>}
                 <Td className="whitespace-nowrap tabular-nums">{fmtDate(d.document_date)}</Td>

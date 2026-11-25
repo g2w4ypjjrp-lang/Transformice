@@ -3,7 +3,7 @@
 import { Session } from "@supabase/supabase-js";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { api } from "./api";
+import { api, wakeApi } from "./api";
 import { supabase } from "./supabase";
 import type { Me, Membership, Role } from "./types";
 
@@ -20,7 +20,7 @@ interface Ctx {
 
 const SessionContext = createContext<Ctx | null>(null);
 const FIRM_KEY = "maliscan.firm";
-const PUBLIC = ["/login", "/register", "/forgot-password", "/reset-password", "/invite"];
+const PUBLIC = ["/login", "/register", "/forgot-password", "/reset-password", "/invite", "/indir"];
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -39,6 +39,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    wakeApi();
     let mounted = true;
     try { setFirmIdState(localStorage.getItem(FIRM_KEY)); } catch { /* private mode */ }
     supabase().auth.getSession().then(async ({ data }) => {

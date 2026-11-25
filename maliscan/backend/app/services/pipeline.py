@@ -69,6 +69,11 @@ def extract(content: bytes, mime_type: str, file_kind: str, *, taxpayer_tax_numb
                                                                                   "note": "embedded"}
             except UblError:
                 pass
+    if claude is None and not settings.anthropic_api_key:
+        # Free/manual mode: no AI provider configured. The document goes straight to
+        # review with an empty extraction; the user types the key fields.
+        return ExtractedDocument(document_type=None, direction="purchase", currency="TRY"), {
+            "source": "manual", "manual_reason": "ai_not_configured"}
     ocr_text, ocr_name = None, None
     try:
         provider = get_ocr_provider(settings)
@@ -119,6 +124,11 @@ def save_extraction(conn: Connection, *, firm_id, document_id, doc: ExtractedDoc
                     created_by: uuid.UUID | None) -> uuid.UUID:
     """Store a new current extraction version + items and update document key fields."""
     doc, issues, confidence = validate_extraction(doc, source=meta["source"])
+    if meta.get("manual_reason") == "ai_not_configured":
+        issues.insert(0, {"severity": "info", "code": "manual_entry_required",
+                          "message": "Yapay zekâ okuması kapalı: belge verisini (tarih, satıcı, KDV, toplam) "
+                                     "görüntüye bakarak girin ve kaydedin.", "field": None})
+        confidence = 0.0
     version = conn.execute(text("""SELECT coalesce(max(version), 0) + 1 FROM public.extracted_data
                                    WHERE firm_id = :f AND document_id = :d"""),
                            {"f": firm_id, "d": document_id}).scalar_one()

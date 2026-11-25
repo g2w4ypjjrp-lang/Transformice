@@ -1,7 +1,8 @@
 /** @type {import('next').NextConfig} */
 const api = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const supabase = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const csp = [
+const staticExport = process.env.STATIC_EXPORT === "1";
+export const csp = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline'",
@@ -15,10 +16,14 @@ const csp = [
 ].join("; ");
 
 const nextConfig = {
-  output: "standalone",
+  // STATIC_EXPORT=1 → plain files in out/ (Cloudflare Pages, free); otherwise a Node server (Docker).
+  output: staticExport ? "export" : "standalone",
+  trailingSlash: staticExport,
+  images: { unoptimized: true },
   reactStrictMode: true,
   poweredByHeader: false,
-  async headers() {
+  // Static hosting serves headers from public/_headers (scripts/write-headers.mjs).
+  ...(staticExport ? {} : { async headers() {
     return [{
       source: "/:path*",
       headers: [
@@ -29,6 +34,6 @@ const nextConfig = {
         { key: "X-Frame-Options", value: "DENY" },
       ],
     }];
-  },
+  } }),
 };
 export default nextConfig;

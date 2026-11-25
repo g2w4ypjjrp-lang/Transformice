@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,7 +24,36 @@ def create_app() -> FastAPI:
     configure_logging(settings.log_level)
 
     docs_enabled = settings.environment != "production"
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        stop = threading.Event()
+        thread = None
+        if settings.run_migrations_on_startup:
+            from app.db.migrate import run as migrate
+
+            applied = migrate(settings.database_url.get_secret_value())
+            log.info("migrations checked", extra={"event": "migrations.startup", "status_code": len(applied)})
+        if settings.storage_backend == "supabase":
+            from app.services.storage import get_storage
+
+            try:
+                get_storage().ensure_buckets(["documents", "exports"])  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001 — storage misconfiguration must not stop the API
+                log.exception("bucket check failed")
+        if settings.embedded_worker:
+            from app.worker.main import run_loop
+
+            thread = threading.Thread(target=run_loop, args=(stop,), kwargs={"settings": settings},
+                                      name="embedded-worker", daemon=True)
+            thread.start()
+        yield
+        stop.set()
+        if thread:
+            thread.join(timeout=30)
+
     app = FastAPI(
+        lifespan=lifespan,
         title="MaliScan AI API",
         version="0.1.0",
         description="Multi-tenant document processing and accounting API for Turkish SMMM offices.",
