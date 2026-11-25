@@ -471,3 +471,26 @@ def test_bulk_approve_accepts_complete_free_ocr_receipts(client, office, engine)
     r = client.post(f"/api/v1/firms/{f}/documents/bulk-approve", headers=office["h"], json={"document_ids": ids})
     assert r.status_code == 200, r.text
     assert sorted(r.json()["approved"]) == sorted(ids), r.json()
+
+
+def test_redownload_fills_receipt_number_from_stored_ocr_text(client, office, engine):
+    """An exported receipt whose number was misread is downloaded again with the number
+    recovered from its stored OCR text — no rescanning, records unchanged."""
+    from tests.test_receipt_parser import OCR_TILTED_SHIFTED
+
+    f = office["firm"]
+    noisy = OCR_TILTED_SHIFTED.replace("FİŞ NO:0004", "TİŞNO©:0004")
+    r = client.post(f"/api/v1/firms/{f}/taxpayers/{office['tp']}/documents", headers=office["h"],
+                    files={"file": ("a.jpg", thermal_receipt_image(tilt=2), "image/jpeg")},
+                    data={"source": "camera", "ocr_text": noisy})
+    doc_id = r.json()["id"]
+    with engine.begin() as c:  # simulate the old parser: number not read
+        c.execute(text("UPDATE documents SET document_number = NULL WHERE id = :d"), {"d": doc_id})
+        c.execute(text("UPDATE journal_entries SET document_number = NULL WHERE document_id = :d"), {"d": doc_id})
+    assert client.post(f"/api/v1/firms/{f}/documents/{doc_id}/approve", headers=office["h"], json={}).status_code == 200
+    exp = client.post(f"/api/v1/firms/{f}/taxpayers/{office['tp']}/exports", headers=office["h"],
+                      json={"all_approved": True, "format": "fatura_listesi"}).json()
+    rows = list(csv.reader(io.StringIO(client.get(f"/api/v1/firms/{f}/exports/{exp['id']}/download", headers=office["h"])
+                                         .content.decode("cp1254")), delimiter=";"))
+    assert rows[0][-2:] == ["HesapKodu", "KDVHesapKodu"]
+    assert rows[1][1] == "0004" and rows[1][6].startswith("770") and rows[1][7].startswith("191")

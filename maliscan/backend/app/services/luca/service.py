@@ -28,12 +28,17 @@ from app.services.luca.models import ExportFile, ExportResult, Issue, Voucher
 from app.services.luca.template import LUCA_FIS_AKTARIM_2020_EVIDENCE, LucaTemplate
 from app.services.luca.validation import validate_vouchers
 
-Format = Literal["csv", "xlsx", "fatura_listesi"]
+Format = Literal["csv", "xlsx", "fatura_listesi", "fatura_listesi_hesapli"]
+FATURA_FORMATS = ("fatura_listesi", "fatura_listesi_hesapli")
 
 # Header of the user's own Luca "Fatura Aktarım" sample file (luca_gider_fatura_listesi.csv),
 # reproduced byte-for-byte in cp1254. One row per invoice; Luca's screen takes ≤400 rows.
 FATURA_LISTESI_HEADERS = ["EvrakTarihi", "EvrakNo", "Açıklama", "GenelToplam", "Matrah", "KDV"]
 FATURA_LISTESI_MAX_ROWS = 400
+# Same list plus the accounts MaliScan booked (learned per supplier), for Luca rules with
+# "HESAP KODUNU SÜTUNDAN AL" (official article 01.02.11): Matrah → HesapKodu, KDV → KDVHesapKodu.
+FATURA_LISTESI_HESAPLI_HEADERS = FATURA_LISTESI_HEADERS + ["HesapKodu", "KDVHesapKodu"]
+_VAT_PREFIXES = ("191", "391", "360")
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
@@ -98,12 +103,12 @@ class LucaExportService:
 
     def split(self, vouchers: list[Voucher]) -> list[list[Voucher]]:
         """Chunks of ≤ max_vouchers_per_file; a voucher is never split across files."""
-        size = FATURA_LISTESI_MAX_ROWS if self.options.fmt == "fatura_listesi" else self.template.max_vouchers_per_file
+        size = FATURA_LISTESI_MAX_ROWS if self.options.fmt in FATURA_FORMATS else self.template.max_vouchers_per_file
         return [vouchers[i:i + size] for i in range(0, len(vouchers), size)]
 
     # ------------------------------------------------------------------ building
     def _build_file(self, index: int, chunk: list[Voucher], issues: list[Issue]) -> ExportFile:
-        if self.options.fmt == "fatura_listesi":
+        if self.options.fmt in FATURA_FORMATS:
             return self._build_fatura_listesi(index, chunk, issues)
         rows: list[list[object]] = []
         voucher_map: dict[str, str] = {}
@@ -154,12 +159,14 @@ class LucaExportService:
         t = self.template
         buf = io.StringIO()
         writer = csv.writer(buf, delimiter=";", lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL)
-        writer.writerow(FATURA_LISTESI_HEADERS)
+        with_accounts = self.options.fmt == "fatura_listesi_hesapli"
+        writer.writerow(FATURA_LISTESI_HESAPLI_HEADERS if with_accounts else FATURA_LISTESI_HEADERS)
         voucher_map: dict[str, str] = {}
         for seq, v in enumerate(chunk, start=1):
             voucher_map[str(seq)] = str(v.source_id)
             kdv = sum((ln.debit for ln in v.lines if ln.account_code.startswith("191")), Decimal("0"))
             matrah = v.total_debit - kdv
+            extra = [_main_debit(v, vat=False), _main_debit(v, vat=True)] if with_accounts else []
             writer.writerow([
                 (v.document_date or v.voucher_date).strftime(t.date_format),
                 self._text(v.document_number, v, issues) or "",
@@ -167,11 +174,13 @@ class LucaExportService:
                 _fmt_decimal(matrah + kdv, 2, t.decimal_separator, ""),
                 _fmt_decimal(matrah, 2, t.decimal_separator, ""),
                 _fmt_decimal(kdv, 2, t.decimal_separator, ""),
+                *extra,
             ])
         content = self._encode(buf.getvalue(), issues)
         total = sum((v.total_debit for v in chunk), Decimal("0"))
         return ExportFile(
-            file_index=index, filename=f"luca_fatura_listesi_{index:03d}.csv", content=content,
+            file_index=index, content=content,
+            filename=f"luca_fatura_listesi{'_hesapli' if with_accounts else ''}_{index:03d}.csv",
             sha256=hashlib.sha256(content).hexdigest(), voucher_count=len(chunk), row_count=len(chunk),
             voucher_map=voucher_map, total_debit=total, total_credit=total)
 
@@ -272,6 +281,15 @@ def _fmt_decimal(value: Decimal, places: int | None, dec_sep: str, thou_sep: str
             whole = whole[:-3]
         whole = thou_sep.join([whole, *groups])
     return sign + whole + (dec_sep + frac if frac else "")
+
+
+def _main_debit(v: Voucher, *, vat: bool) -> str:
+    """Account of the largest expense line (vat=False) or VAT line (vat=True). Purchases: debits
+    (770…/191…); a sales invoice in the list: credits (600…/391…)."""
+    sales = any(ln.credit > 0 and ln.account_code.startswith("391") for ln in v.lines)
+    side = (lambda ln: ln.credit) if sales else (lambda ln: ln.debit)
+    lines = [ln for ln in v.lines if side(ln) > 0 and ln.account_code.startswith(_VAT_PREFIXES) == vat]
+    return max(lines, key=side).account_code if lines else ""
 
 
 def _supplier_label(v: Voucher) -> str | None:

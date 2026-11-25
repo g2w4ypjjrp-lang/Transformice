@@ -46,3 +46,14 @@ def test_split_at_400_rows():
     res = _svc().export([_invoice("10", "2", doc=f"D{i}") for i in range(401)])
     assert res.ok, [i for i in res.issues if i.severity == "error"]
     assert [f.row_count for f in res.files] == [400, 1]
+
+
+def test_hesapli_variant_carries_expense_and_vat_accounts():
+    res = LucaExportService(options=ExportOptions(fmt="fatura_listesi_hesapli")).export(
+        [_invoice("1000.00", "200.00"), _invoice("85.50", "0", supplier="ŞİŞLİ BÜFE", doc="F-9", day=4)])
+    assert res.ok, res.issues
+    rows = list(csv.reader(io.StringIO(res.files[0].content.decode("cp1254")), delimiter=";"))
+    assert rows[0] == ["EvrakTarihi", "EvrakNo", "Açıklama", "GenelToplam", "Matrah", "KDV", "HesapKodu", "KDVHesapKodu"]
+    assert rows[1] == ["03.11.2026", "ABC2026000000123", "AKYILDIZ PETROL", "1200,00", "1000,00", "200,00", "770.01", "191.01"]
+    assert rows[2][-2:] == ["770.01", ""]  # no VAT line → empty VAT account
+    assert res.files[0].filename == "luca_fatura_listesi_hesapli_001.csv"

@@ -29,7 +29,7 @@ class ExportIn(BaseModel):
     all_approved: bool = False
     date_from: date | None = None
     date_to: date | None = None
-    format: Literal["csv", "xlsx", "fatura_listesi"] = "csv"
+    format: Literal["csv", "xlsx", "fatura_listesi", "fatura_listesi_hesapli"] = "csv"
     encoding: Literal["cp1254", "utf-8-sig"] = "cp1254"
     allowed_duplicate_ids: list[uuid.UUID] = Field(default_factory=list)
 
@@ -47,7 +47,7 @@ def create_export(firm_id: uuid.UUID, taxpayer_id: uuid.UUID, body: ExportIn, co
         {"f": firm_id, "t": taxpayer_id, "df": body.date_from, "dt": body.date_to})]
     if not ids:
         raise ApiError(422, "nothing_to_export", "no approved journal entries match")
-    service = LucaExportService(options=ExportOptions(fmt=body.format, encoding="cp1254" if body.format == "fatura_listesi" else body.encoding))
+    service = LucaExportService(options=ExportOptions(fmt=body.format, encoding="cp1254" if body.format.startswith("fatura_listesi") else body.encoding))
     try:
         job_id, result = export_journal_entries(
             conn, firm_id=firm_id, taxpayer_id=taxpayer_id, entry_ids=ids, service=service,
@@ -109,7 +109,8 @@ def get_export(firm_id: uuid.UUID, export_id: uuid.UUID, conn: DB) -> dict:
 @router.get("/exports/{export_id}/download", summary="Download an earlier export again in another format "
             "(no status change; >400 rows → zip)")
 def download_export_as(firm_id: uuid.UUID, export_id: uuid.UUID, conn: DB,
-                       format: Literal["fatura_listesi", "csv", "xlsx"] = "fatura_listesi") -> Response:
+                       format: Literal["fatura_listesi_hesapli", "fatura_listesi", "csv", "xlsx"]
+                       = "fatura_listesi_hesapli") -> Response:
     require_firm_role(conn, firm_id, ALL_ROLES)
     job = conn.execute(text("SELECT taxpayer_id FROM public.export_jobs WHERE firm_id = :f AND id = :j"),
                        {"f": firm_id, "j": export_id}).mappings().one_or_none()
@@ -119,6 +120,7 @@ def download_export_as(firm_id: uuid.UUID, export_id: uuid.UUID, conn: DB,
                                              {"j": export_id}, lock=False)]
     if not vouchers:
         raise ApiError(422, "nothing_to_export", "export has no journal entries")
+    vouchers = _fill_missing_numbers(conn, firm_id, vouchers)
     files = LucaExportService(options=ExportOptions(fmt=format, encoding="cp1254")).rebuild_files(vouchers)
     if len(files) == 1:
         f = files[0]
@@ -161,3 +163,29 @@ def delete_export(firm_id: uuid.UUID, export_id: uuid.UUID, conn: DB) -> Respons
         except Exception:  # noqa: BLE001 — orphan file is harmless; retention sweeps it
             pass
     return Response(status_code=204)
+
+
+def _fill_missing_numbers(conn, firm_id, vouchers: list) -> list:
+    """Receipt numbers the OCR label misread at the time (empty or no digits, e.g. 'ZI') are
+    re-read from the stored OCR text with the current parser — no rescanning needed. Only the
+    downloaded file is affected; the stored records stay unchanged."""
+    import dataclasses
+    import re
+
+    from app.services.extraction.receipt_parser import _doc_number
+
+    need = [v.source_id for v in vouchers if not re.search(r"\d", v.document_number or "")]
+    if not need:
+        return vouchers
+    texts = dict(conn.execute(text("""
+        SELECT DISTINCT ON (je.id) je.id, e.raw_text
+          FROM public.journal_entries je
+          JOIN public.extracted_data e ON e.document_id = je.document_id AND e.firm_id = je.firm_id
+         WHERE je.firm_id = :f AND je.id = ANY(:ids) AND e.raw_text IS NOT NULL
+         ORDER BY je.id, e.version DESC"""), {"f": firm_id, "ids": need}).all())
+    out = []
+    for v in vouchers:
+        raw = texts.get(v.source_id)
+        num = _doc_number(raw.splitlines()) if raw else None
+        out.append(dataclasses.replace(v, document_number=num) if num else v)
+    return out
