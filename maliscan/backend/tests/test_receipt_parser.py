@@ -175,3 +175,11 @@ def test_vat_amount_with_ocr_space_after_thousands_dot():
     doc, notes = parse_text(text.replace("NAKİT 7.100,09", "NAKİT              7.100,00"), source="ocr")
     assert doc.total_amount == D("7100.00")
     assert [(int(g.rate), g.amount) for g in doc.vat_breakdown] == [(20, D("1183.33"))]
+
+
+def test_supplier_name_ignores_time_lines_and_trailing_noise():
+    text = "SAN: 19:17\nKAPLAN AMBALAJ MALZEMELERİ iü ui\nBARBOROS MAH.M.BEY CAD.NO:16A\nTOPLAM *10,00"
+    doc, _ = parse_text(text, source="ocr")
+    assert doc.supplier.name == "KAPLAN AMBALAJ MALZEMELERİ"
+    doc, _ = parse_text("AKYILDIZ AMBALAJ\nSAN.VE DIŞ TDS:\nGÜNEŞLİ VD 1231231231", source="ocr")
+    assert doc.supplier.name == "AKYILDIZ AMBALAJ SAN.VE DIŞ"

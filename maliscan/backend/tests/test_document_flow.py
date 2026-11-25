@@ -296,3 +296,24 @@ def test_document_deleted_while_queued_is_skipped_quietly(client, office, engine
                                {"j": job["id"]}).one()
     assert deleted and st != "failed"
     assert tuple(job_status) == ("succeeded", "skipped_document_gone")
+
+
+def test_supplier_name_remembered_by_tax_number(client, office, engine):
+    import shutil
+
+    if not shutil.which("tesseract"):
+        pytest.skip("tesseract not installed")
+    first = _upload(client, office, thermal_receipt_image(tilt=1)).json()["id"]
+    s = get_settings()
+    while (job := claim_job(engine, "w", office["firm"])) is not None:
+        run_job(job, engine=engine, storage=get_storage(), settings=s)
+    base = f"/api/v1/firms/{office['firm']}/documents/{first}"
+    data = client.get(base, headers=office["h"]).json()["extraction"]["data"]
+    data["supplier"]["name"] = "Örnek Akaryakıt Ltd. Şti. (düzeltilmiş)"
+    assert client.put(f"{base}/extraction", headers=office["h"], json=data).status_code == 200
+    second = _upload(client, office, thermal_receipt_image(tilt=-2)).json()["id"]
+    while (job := claim_job(engine, "w", office["firm"])) is not None:
+        run_job(job, engine=engine, storage=get_storage(), settings=s)
+    ex = client.get(f"/api/v1/firms/{office['firm']}/documents/{second}", headers=office["h"]).json()["extraction"]
+    assert ex["data"]["supplier"]["name"] == "Örnek Akaryakıt Ltd. Şti. (düzeltilmiş)"
+    assert "supplier_name_from_history" in {i["code"] for i in ex["validation_issues"]}

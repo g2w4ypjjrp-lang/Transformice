@@ -147,9 +147,29 @@ def _mappings_rules(conn: Connection, firm_id, taxpayer_id) -> tuple[list[Mappin
     return maps, rules
 
 
+def _remember_supplier_name(conn: Connection, firm_id, doc: ExtractedDocument, meta: dict) -> None:
+    """OCR often garbles names; if this VKN/TCKN was already corrected or approved in this office,
+    reuse that (user-confirmed) name and say so."""
+    tax = doc.supplier.tax_number
+    if meta.get("source") not in ("ocr_rules", "pdf_text") or not tax:
+        return
+    known = conn.execute(text("""
+        SELECT e.data #>> '{supplier,name}' AS name, count(*) AS n
+          FROM public.extracted_data e JOIN public.documents d ON d.id = e.document_id AND d.firm_id = e.firm_id
+         WHERE e.firm_id = :f AND e.is_current AND e.data #>> '{supplier,tax_number}' = :t
+           AND (e.source = 'manual' OR d.status IN ('approved', 'exported'))
+           AND coalesce(e.data #>> '{supplier,name}', '') <> ''
+         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 1"""), {"f": firm_id, "t": tax}).mappings().one_or_none()
+    if known and known["name"] != doc.supplier.name:
+        doc.supplier.name = known["name"]
+        meta.setdefault("notes", []).append({"severity": "info", "code": "supplier_name_from_history",
+                                             "message": "Satıcı adı, bu VKN için daha önce onayladığınız kayıttan alındı."})
+
+
 def save_extraction(conn: Connection, *, firm_id, document_id, doc: ExtractedDocument, meta: dict,
                     created_by: uuid.UUID | None) -> uuid.UUID:
     """Store a new current extraction version + items and update document key fields."""
+    _remember_supplier_name(conn, firm_id, doc, meta)
     doc, issues, confidence = validate_extraction(doc, source=meta["source"])
     for note in meta.get("notes") or []:
         issues.append({**note, "field": None})

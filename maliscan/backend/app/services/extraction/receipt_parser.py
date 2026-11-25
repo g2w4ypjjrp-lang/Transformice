@@ -112,26 +112,35 @@ def _tax_number(lines: list[str]) -> str | None:
 
 
 def _clean_line(ln: str) -> str:
-    """Drop OCR edge noise: short leading tokens ('NE', 'AN8', 'pM') and trailing dashes/symbols."""
+    """Drop OCR edge noise: short leading tokens ('NE', 'AN8', 'pM'), trailing junk ('iü ui', 'TDS:')
+    and dashes/symbols."""
     words = ln.strip().strip("—-–_|>'\"“”").split()
     while words and (len(words[0]) <= 3 and not re.search(r"A\.?S|LTD|STI", fold(words[0]))):
         words = words[1:]
-    return " ".join(w for w in words if w not in ("—", "-", "–", "|")).strip(" —-–")
+    while words and (len(words[-1]) <= 2 and not re.search(r"A\.?S", fold(words[-1]))
+                     or words[-1].islower() or words[-1].endswith(":")):
+        words = words[:-1]
+    return " ".join(w for w in words if w not in ("—", "-", "–", "|")).strip(" —-–|")
+
+
+_NOT_A_NAME = re.compile(r"\d{1,2}\s?:\s?\d{2}|SAAT|TARIH|FIS\s?NO|TEL\b|TEL:|MAH\.|CAD\.|SOK\.|NO\s?:|V\.?D|VERGI|DAIRESI")
+_COMPANY = re.compile(r"\b(LTD|STI|A\.S\.?|ANONIM|LIMITED|SIRKETI|TICARET|TIC\.|SANAYI|SAN\.|SAN\s+VE|PETROL|MARKET)")
 
 
 def _supplier(lines: list[str]) -> str | None:
     head = [_clean_line(ln) for ln in lines[:10]]
-    company = re.compile(r"\b(LTD|STI|A\.S|AS\b|TIC|SAN|LIMITED|ANONIM|SIRKETI|PETROL|MARKET)")
-    for i, ln in enumerate(head):
-        if len(ln) >= 3 and company.search(fold(ln)):
-            prev = head[i - 1] if i > 0 else ""
-            # company names often wrap: "AKYILDIZ AMBALAJ" / "SAN.VE DIŞ TİC.LTD.ŞTİ."
-            if prev and len(prev) >= 3 and not re.search(r"\d", prev) and prev.isupper() and not company.search(fold(prev)):
-                return f"{prev} {ln}"
+    usable = [(i, ln) for i, ln in enumerate(head) if len(ln) >= 3 and not _NOT_A_NAME.search(fold(ln))]
+    for idx, (i, ln) in enumerate(usable):
+        if _COMPANY.search(fold(ln)):
+            if idx > 0:
+                j, prev = usable[idx - 1]
+                # company names often wrap: "AKYILDIZ AMBALAJ" / "SAN.VE DIŞ TİC.LTD.ŞTİ."
+                if j == i - 1 and not re.search(r"\d", prev) and prev.isupper() and not _COMPANY.search(fold(prev)):
+                    return f"{prev} {ln}"
             return ln
-    for ln in head:
+    for _i, ln in usable:
         f = fold(ln)
-        if len(ln) >= 3 and not re.search(r"\d", ln) and "FATURA" not in f and "FIS" not in f:
+        if not re.search(r"\d", ln) and "FATURA" not in f and "FIS" not in f and ln.isupper():
             return ln
     return None
 
