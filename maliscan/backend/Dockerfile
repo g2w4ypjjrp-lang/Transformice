@@ -4,7 +4,10 @@
 FROM python:3.12-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
     MALISCAN_DATABASE_DIR=/app/database
-RUN useradd --create-home --uid 10001 maliscan
+# Free on-server OCR (Turkish) + PDF rasteriser for scanned PDFs.
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-tur poppler-utils \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 maliscan
 WORKDIR /app/backend
 COPY backend/requirements.txt .
 RUN --mount=type=secret,id=ca_bundle,required=false \

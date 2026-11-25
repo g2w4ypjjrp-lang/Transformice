@@ -70,10 +70,8 @@ def extract(content: bytes, mime_type: str, file_kind: str, *, taxpayer_tax_numb
             except UblError:
                 pass
     if claude is None and not settings.anthropic_api_key:
-        # Free/manual mode: no AI provider configured. The document goes straight to
-        # review with an empty extraction; the user types the key fields.
-        return ExtractedDocument(document_type=None, direction="purchase", currency="TRY"), {
-            "source": "manual", "manual_reason": "ai_not_configured"}
+        return _extract_free(content, mime_type, file_kind, taxpayer_tax_number=taxpayer_tax_number,
+                             settings=settings)
     ocr_text, ocr_name = None, None
     try:
         provider = get_ocr_provider(settings)
@@ -95,6 +93,35 @@ def extract(content: bytes, mime_type: str, file_kind: str, *, taxpayer_tax_numb
             doc.direction = "purchase"
     return doc, {"source": "ocr_ai", "ai_model": result.model, "ocr_provider": ocr_name, "raw_text": ocr_text,
                  "usage": result.usage}
+
+
+def _extract_free(content: bytes, mime_type: str, file_kind: str, *, taxpayer_tax_number: str,
+                  settings: Settings) -> tuple[ExtractedDocument, dict]:
+    """No AI key: PDF text layer or on-server Tesseract OCR + Turkish receipt rules.
+    Falls back to manual entry when nothing readable is found."""
+    from app.services.extraction import local_ocr
+    from app.services.extraction.receipt_parser import parse_text
+
+    text, how = "", None
+    try:
+        if file_kind == "pdf":
+            text = local_ocr.pdf_text(content)
+            how = "pdf_text"
+            if len(text.strip()) < 40 and settings.local_ocr_enabled and local_ocr.available():
+                text, how = local_ocr.ocr_pdf(content), "ocr_rules"
+        elif file_kind == "image" and settings.local_ocr_enabled and local_ocr.available():
+            text, how = local_ocr.ocr_image(content), "ocr_rules"
+    except (local_ocr.LocalOcrError, OSError, ValueError) as exc:
+        log.warning("local ocr failed", extra={"error_code": type(exc).__name__})
+        text = ""
+    if len(text.strip()) < 20:
+        return ExtractedDocument(document_type=None, direction="purchase", currency="TRY"), {
+            "source": "manual", "manual_reason": "ai_not_configured"}
+    doc, notes = parse_text(text, source=how or "ocr_rules")
+    if doc.supplier.tax_number and doc.supplier.tax_number == taxpayer_tax_number:
+        doc.direction = "sales"
+    return doc, {"source": how, "ocr_provider": "tesseract" if how == "ocr_rules" else None,
+                 "raw_text": text[:20000], "notes": notes}
 
 
 def _taxpayer_config(conn: Connection, firm_id, taxpayer_id) -> tuple[TaxpayerConfig, set[str]]:
@@ -124,9 +151,15 @@ def save_extraction(conn: Connection, *, firm_id, document_id, doc: ExtractedDoc
                     created_by: uuid.UUID | None) -> uuid.UUID:
     """Store a new current extraction version + items and update document key fields."""
     doc, issues, confidence = validate_extraction(doc, source=meta["source"])
+    for note in meta.get("notes") or []:
+        issues.append({**note, "field": None})
+    if meta.get("source") in ("ocr_rules", "pdf_text"):
+        issues.insert(0, {"severity": "info", "code": "read_by_free_ocr",
+                          "message": "Belge ücretsiz OCR ile otomatik okundu. Rakamları fişle karşılaştırıp onaylayın.",
+                          "field": None})
     if meta.get("manual_reason") == "ai_not_configured":
         issues.insert(0, {"severity": "info", "code": "manual_entry_required",
-                          "message": "Yapay zekâ okuması kapalı: belge verisini (tarih, satıcı, KDV, toplam) "
+                          "message": "Belge otomatik okunamadı: verileri (tarih, satıcı, KDV, toplam) "
                                      "görüntüye bakarak girin ve kaydedin.", "field": None})
         confidence = 0.0
     version = conn.execute(text("""SELECT coalesce(max(version), 0) + 1 FROM public.extracted_data

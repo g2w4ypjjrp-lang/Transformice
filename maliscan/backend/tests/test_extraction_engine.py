@@ -248,9 +248,23 @@ def _lines(draft):
 
 class TestEngine:
     def test_cash_receipt_vat20(self):
-        d = generate_journal(_doc(), CFG)
+        d = generate_journal(_doc(supplier={"name": "Örnek Ticaret", "tax_number": SUPPLIER_VKN}), CFG)
         assert _lines(d) == [("770.01", D("1000.00"), 0), ("191.20", D("200.00"), 0), ("100.01", 0, D("1200.00"))]
         assert d.total_debit == d.total_credit and d.warnings == []
+
+    @pytest.mark.parametrize("supplier,item,account", [
+        ("Örnek Akaryakıt", None, "770.02"), ("ABC Ltd", "KURŞUNSUZ 95", "770.02"),
+        ("Köşe Lokanta", None, "770.04"), ("XYZ A.Ş.", "A4 FOTOKOPİ KAĞIDI", "770.03"),
+        ("Turkcell İletişim", None, "770.05"), ("Enerjisa", None, "770.07")])
+    def test_expense_account_from_content(self, supplier, item, account):
+        lines = [{"description": item, "total_amount": "1200.00", "vat_rate": "20"}] if item else []
+        d = generate_journal(_doc(supplier={"name": supplier}, lines=lines), CFG)
+        assert d.lines[0].account_code == account
+        assert {w["code"] for w in d.warnings} == {"account_by_category"}
+
+    def test_category_ignored_when_account_not_in_chart(self):
+        d = generate_journal(_doc(), CFG, chart={"770.01", "191.20", "100.01"})
+        assert d.lines[0].account_code == "770.01"
 
     def test_multi_vat_rates(self):
         d = generate_journal(_doc(vat_breakdown=[{"rate": 1, "base": "100", "amount": "1"},
@@ -274,7 +288,7 @@ class TestEngine:
                                   vat_breakdown=[{"rate": 20, "base": "10000", "amount": "2000"}],
                                   total_amount="12000", withholding={"code": "624", "ratio": "0.7", "amount": "1400"}),
                              CFG)
-        assert _lines(d) == [("770.01", D("10000.00"), 0), ("191.20", D("2000.00"), 0),
+        assert _lines(d) == [("770.02", D("10000.00"), 0), ("191.20", D("2000.00"), 0),
                              ("360.02", 0, D("1400.00")), ("320.01", 0, D("10600.00"))]
 
     def test_mapping_and_kkeg(self):
@@ -298,7 +312,7 @@ class TestEngine:
         assert _lines(d) == [("120.01", D("1200.00"), 0), ("600.01", 0, D("1000.00")), ("391.20", 0, D("200.00"))]
 
     def test_unknown_vat_books_gross_with_warning(self):
-        d = generate_journal(_doc(vat_breakdown=[]), CFG)
+        d = generate_journal(_doc(vat_breakdown=[], supplier={"name": "Örnek Ticaret"}), CFG)
         assert _lines(d) == [("770.01", D("1200.00"), 0), ("100.01", 0, D("1200.00"))]
         assert {w["code"] for w in d.warnings} == {"vat_unknown"}
 

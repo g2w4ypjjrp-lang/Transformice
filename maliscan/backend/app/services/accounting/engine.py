@@ -147,6 +147,43 @@ def _find_mapping(mappings: list[Mapping], doc: ExtractedDocument) -> Mapping | 
     return None
 
 
+# Built-in expense categories used only when no rule or mapping matched.
+# (keywords are ASCII-folded; account must exist in the taxpayer's chart)
+CATEGORY_KEYWORDS: list[tuple[str, str, tuple[str, ...]]] = [
+    ("akaryakıt/taşıt", "770.02", ("AKARYAKIT", "PETROL", "BENZIN", "MOTORIN", "KURSUNSUZ", "DIZEL", "LPG", "OPET",
+                                    "SHELL", "AYTEMIZ", "OTOPARK", "HGS", "OGS", "OTOYOL", "KOPRU", "TAKSI")),
+    ("yemek/ikram", "770.04", ("RESTORAN", "RESTAURANT", "LOKANTA", "CAFE", "KAFE", "YEMEK", "KEBAP", "PIDE",
+                               "PIZZA", "BURGER", "SIMIT", "PASTANE", "FIRIN", "EKMEK", "GIDA", "MARKET", "CAY")),
+    ("kırtasiye/büro", "770.03", ("KIRTASIYE", "TONER", "KAGIT", "FOTOKOPI", "KALEM", "DOSYA", "KARTUS")),
+    ("haberleşme", "770.05", ("TURKCELL", "VODAFONE", "TELEKOM", "TTNET", "SUPERONLINE", "INTERNET", "GSM",
+                              "KARGO", "PTT")),
+    ("enerji", "770.07", ("ELEKTRIK", "ENERJISA", "DOGALGAZ", "IGDAS", "BASKENTGAZ", "SU IDARESI", "ASKI", "ISKI")),
+    ("bakım/onarım", "770.08", ("SERVIS", "YEDEK PARCA", "TAMIR", "BAKIM", "LASTIK", "NALBUR", "HIRDAVAT")),
+    ("temizlik", "770.09", ("TEMIZLIK", "DETERJAN", "CAMASIR", "BULASIK")),
+    ("yazılım/abonelik", "770.11", ("YAZILIM", "LISANS", "ABONELIK", "GOOGLE", "MICROSOFT", "ADOBE")),
+]
+
+
+def _fold(s: str | None) -> str:
+    import unicodedata as _u
+    t = (s or "").replace("ı", "i").replace("İ", "I").upper()
+    t = _u.normalize("NFKD", t)
+    return " ".join("".join(c for c in t if not _u.combining(c)).split())
+
+
+def _category_account(doc: ExtractedDocument, chart: set[str] | None) -> tuple[str, str] | None:
+    """Pick an expense account from the supplier name, then the largest item lines."""
+    texts = [_fold(doc.supplier.name)] + [_fold(l.description) for l in sorted(
+        doc.lines, key=lambda l: l.total_amount or l.net_amount or Decimal(0), reverse=True)]
+    for text in texts:
+        if not text:
+            continue
+        for label, account, words in CATEGORY_KEYWORDS:
+            if any(w in text for w in words) and (chart is None or account in chart):
+                return label, account
+    return None
+
+
 def _vat_account(cfg: TaxpayerConfig, rate: Decimal, chart: set[str] | None, output: bool) -> str:
     key = "output_vat_accounts" if output else "input_vat_accounts"
     configured = (cfg.settings.get(key) or {}).get(str(int(rate)) if rate == rate.to_integral() else str(rate))
@@ -197,8 +234,14 @@ def generate_journal(doc: ExtractedDocument, cfg: TaxpayerConfig, *, mappings: l
     lines: list[DraftLine] = []
 
     if direction == "purchase":
-        expense = actions.get("expense_account") or (mapping.account_code if mapping else None) \
-            or cfg.default_expense_account
+        expense = actions.get("expense_account") or (mapping.account_code if mapping else None)
+        if expense is None and not non_deductible:
+            category = _category_account(doc, chart)
+            if category:
+                expense, source = category[1], f"category:{category[0]}"
+                warn("account_by_category", f"Gider hesabı belge içeriğinden seçildi ({category[0]} → {category[1]}); "
+                                            "kontrol edin.")
+        expense = expense or cfg.default_expense_account
         if non_deductible and not (actions.get("expense_account") or mapping):
             expense = kkeg_account
         for rate, base, amount in groups:

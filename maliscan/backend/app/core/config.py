@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     google_vision_api_key: SecretStr | None = None
     # Below this confidence a document is always flagged for careful review.
     review_confidence_threshold: float = 0.85
+    # Free on-server OCR (Tesseract, Turkish) used when no ANTHROPIC_API_KEY is set.
+    local_ocr_enabled: bool = True
 
     # ---- Worker -------------------------------------------------------------------
     worker_poll_seconds: float = 2.0

@@ -68,9 +68,9 @@ step("e-invoice reviewed and approved");
 
 await page.goto(`${BASE}/documents?status=needs_review`);
 await page.locator("tbody tr").first().click();
-await page.waitForSelector("text=Yapay zekâ okuması kapalı", { timeout: 30000 });
+await page.waitForSelector("text=ücretsiz OCR ile otomatik okundu", { timeout: 30000 });
 await shot("p4-manual-mode");
-step("receipt photo waits for manual entry (no AI key)");
+step("receipt photo read automatically by free OCR");
 
 await page.goto(`${BASE}/exports`);
 await page.locator("select").filter({ hasText: "Seçin…" }).selectOption({ index: 1 });

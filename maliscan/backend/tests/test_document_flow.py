@@ -65,8 +65,8 @@ def test_full_receipt_flow(client, office, engine):
     assert float(detail["extraction"]["overall_confidence"]) >= 0.85
     j = detail["journal"]
     assert j["status"] == "draft" and D(str(j["total_debit"])) == D("1200.00")
-    assert [l["account_code"] for l in j["lines"]] == ["770.01", "191.20", "100.01"]
-    assert j["lines"][0]["account_name"] == "Genel Yönetim Giderleri"
+    assert [l["account_code"] for l in j["lines"]] == ["770.02", "191.20", "100.01"]  # fuel → 770.02 by content
+    assert j["lines"][0]["account_name"] == "Akaryakıt ve Taşıt Giderleri"
 
     # GPS data from capture metadata was dropped; file served via signed URL
     meta = engine.connect().execute(text("SELECT capture_metadata FROM documents WHERE id = :d"),
@@ -238,12 +238,34 @@ def test_super_admin_endpoints(client, office, make_user, auth_headers, engine):
     assert {"admin.firm_status", "admin.plan_saved"} <= {l["action"] for l in logs}
 
 
-def test_free_mode_without_ai_key_goes_to_manual_review(client, office, engine):
-    """No ANTHROPIC_API_KEY: the document is not failed; it waits for manual entry,
-    and saving the corrected data produces a balanced draft journal."""
-    doc_id = _upload(client, office, thermal_receipt_image(tilt=5)).json()["id"]
+def test_free_mode_reads_receipt_with_local_ocr(client, office, engine):
+    """No ANTHROPIC_API_KEY: on-server Tesseract + Turkish receipt rules read the photo,
+    and the engine codes the accounts — no typing needed."""
+    import shutil
+
+    if not shutil.which("tesseract"):
+        pytest.skip("tesseract not installed")
+    doc_id = _upload(client, office, thermal_receipt_image(tilt=1)).json()["id"]
     settings = get_settings()
     assert settings.anthropic_api_key is None
+    while (job := claim_job(engine, "free-worker", office["firm"])) is not None:
+        assert run_job(job, engine=engine, storage=get_storage(), settings=settings) == "succeeded"
+    d = client.get(f"/api/v1/firms/{office['firm']}/documents/{doc_id}", headers=office["h"]).json()
+    ex = d["extraction"]
+    assert ex["source"] == "ocr_rules" and ex["validation_issues"][0]["code"] == "read_by_free_ocr"
+    assert ex["data"]["total_amount"] == "1200.00" and ex["data"]["document_date"] == "2026-11-03"
+    assert ex["data"]["payment_method"] == "cash" and ex["data"]["document_number"] == "0042"
+    assert float(ex["overall_confidence"]) < 0.85  # always reviewed individually
+    j = d["journal"]
+    assert [(l["account_code"], str(l["debit"]), str(l["credit"])) for l in j["lines"]] == [
+        ("770.02", "1000.00", "0.00"), ("191.20", "200.00", "0.00"), ("100.01", "0.00", "1200.00")]
+
+
+def test_free_mode_falls_back_to_manual_entry(client, office, engine):
+    """OCR disabled/unavailable: the document waits for manual entry and the corrected
+    data produces a balanced draft journal."""
+    doc_id = _upload(client, office, thermal_receipt_image(tilt=5)).json()["id"]
+    settings = get_settings().model_copy(update={"local_ocr_enabled": False})
     while (job := claim_job(engine, "free-worker", office["firm"])) is not None:
         assert run_job(job, engine=engine, storage=get_storage(), settings=settings) == "succeeded"
     base = f"/api/v1/firms/{office['firm']}/documents/{doc_id}"
@@ -253,7 +275,7 @@ def test_free_mode_without_ai_key_goes_to_manual_review(client, office, engine):
     assert d["journal"] is None
     data = d["extraction"]["data"]
     data.update(document_date="2026-11-03", total_amount="1200.00", payment_method="cash",
-                supplier={"name": "Örnek Akaryakıt", "tax_number": None, "tax_office": None, "address": None},
+                supplier={"name": "Örnek Ticaret", "tax_number": None, "tax_office": None, "address": None},
                 vat_breakdown=[{"rate": "20", "base": "1000.00", "amount": "200.00"}])
     r = client.put(f"{base}/extraction", headers=office["h"], json=data)
     assert r.status_code == 200, r.text

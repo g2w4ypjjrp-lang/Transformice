@@ -31,7 +31,7 @@ interface Detail {
   review_threshold: number;
 }
 
-const SOURCE: Record<string, string> = { ubl_xml: "e-Fatura XML (kaynak veri)", ocr_ai: "Yapay zekâ ile okundu", manual: "Elle düzeltildi", pdf_text: "PDF metni" };
+const SOURCE: Record<string, string> = { ubl_xml: "e-Fatura XML (kaynak veri)", ocr_ai: "Yapay zekâ ile okundu", ocr_rules: "Ücretsiz OCR ile okundu", manual: "Elle düzeltildi", pdf_text: "PDF metni" };
 const ACTIONS: Record<string, string> = { approve: "Onayladı", reject: "Reddetti", reopen: "Yeniden açtı", correct: "Veriyi düzeltti" };
 
 export default function DocumentReviewPage() {
