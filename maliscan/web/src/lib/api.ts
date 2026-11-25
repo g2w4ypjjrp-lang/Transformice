@@ -94,3 +94,25 @@ export async function upload<T>(path: string, form: FormData, onProgress?: (p: n
     xhr.send(form);
   });
 }
+
+/** Authenticated file download (Content-Disposition filename) → browser save. */
+export async function downloadFile(path: string): Promise<void> {
+  const headers = new Headers();
+  const t = await token();
+  if (t) headers.set("Authorization", `Bearer ${t}`);
+  const res = await fetch(API_URL + path, { headers, cache: "no-store" });
+  if (!res.ok) {
+    const payload = await res.json().catch(() => null);
+    const err = payload?.error ?? {};
+    throw new ApiError(res.status, err.code ?? "error", trError(err.code, err.message ?? "İndirme başarısız"));
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? "luca.csv";
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}

@@ -121,6 +121,12 @@ def test_full_receipt_flow(client, office, engine):
     assert rows[0][:3] == ["Fiş No", "Fiş Tarihi", "Hesap Kodu"]
     assert [r[2] for r in rows[1:]] == ["770.02", "191.20", "300.01"]
     assert client.get(base, headers=office["h"]).json()["document"]["status"] == "exported"
+    # same export again as Luca "Fatura Aktarım" invoice list (no state change)
+    again = client.get(f"/api/v1/firms/{office['firm']}/exports/{exp['id']}/download?format=fatura_listesi",
+                       headers=office["viewer"])
+    assert again.status_code == 200 and "luca_fatura_listesi_001.csv" in again.headers["content-disposition"]
+    inv = list(csv.reader(io.StringIO(again.content.decode("cp1254")), delimiter=";"))
+    assert inv[0] == ["EvrakTarihi", "EvrakNo", "Açıklama", "GenelToplam", "Matrah", "KDV"] and len(inv) == 2
     # nothing left; re-export refused; reopen refused
     assert client.post(f"/api/v1/firms/{office['firm']}/taxpayers/{office['tp']}/exports", headers=office["h"],
                        json={"all_approved": True}).json()["error"]["code"] == "nothing_to_export"

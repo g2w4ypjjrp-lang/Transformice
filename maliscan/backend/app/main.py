@@ -68,6 +68,7 @@ def create_app() -> FastAPI:
         allow_credentials=False,  # bearer tokens, no cookies
         allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
         allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        expose_headers=["Content-Disposition", "X-Request-ID"],
     )
 
     @app.middleware("http")

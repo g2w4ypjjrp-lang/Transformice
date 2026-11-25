@@ -3,7 +3,7 @@
 import { Download, FileSpreadsheet } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Button, Card, Empty, Field, Input, PageHeader, Select, Spinner, StatusBadge, Table, Td, Th } from "@/components/ui";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, downloadFile } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
 import { BOOKERS, useSession } from "@/lib/session";
 import type { Taxpayer } from "@/lib/types";
@@ -15,7 +15,7 @@ export default function ExportsPage() {
   const { firm, can } = useSession();
   const [taxpayers, setTaxpayers] = useState<Taxpayer[]>([]);
   const [rows, setRows] = useState<ExportRow[] | null>(null);
-  const [form, setForm] = useState({ taxpayer: "", date_from: "", date_to: "", format: "csv", encoding: "cp1254" });
+  const [form, setForm] = useState({ taxpayer: "", date_from: "", date_to: "", format: "fatura_listesi", encoding: "cp1254" });
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ExportDetail | null>(null);
   const [errors, setErrors] = useState<{ message: string; source_id?: string | null }[] | null>(null);
@@ -54,6 +54,13 @@ export default function ExportsPage() {
     setResult(await api<ExportDetail>(`/firms/${firm.firm_id}/exports/${id}`));
   }
 
+  async function downloadAsInvoiceList(id: string) {
+    if (!firm) return;
+    setError(null);
+    try { await downloadFile(`/firms/${firm.firm_id}/exports/${id}/download?format=fatura_listesi`); }
+    catch (e) { setError(e instanceof ApiError ? e.message : "İndirme başarısız"); }
+  }
+
   if (!firm || !rows) return <Spinner />;
   return (
     <>
@@ -68,7 +75,7 @@ export default function ExportsPage() {
             <Field label="Mükellef"><Select value={form.taxpayer} onChange={(e) => setForm({ ...form, taxpayer: e.target.value })}><option value="">Seçin…</option>{taxpayers.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</Select></Field>
             <Field label="Başlangıç tarihi"><Input type="date" value={form.date_from} onChange={(e) => setForm({ ...form, date_from: e.target.value })} /></Field>
             <Field label="Bitiş tarihi"><Input type="date" value={form.date_to} onChange={(e) => setForm({ ...form, date_to: e.target.value })} /></Field>
-            <Field label="Biçim"><Select value={form.format} onChange={(e) => setForm({ ...form, format: e.target.value })}><option value="csv">CSV (; ayraçlı)</option><option value="xlsx">Excel (.xlsx)</option><option value="fatura_listesi">Luca Fatura Listesi (EvrakTarihi;EvrakNo;Açıklama;GenelToplam;Matrah;KDV)</option></Select></Field>
+            <Field label="Biçim"><Select value={form.format} onChange={(e) => setForm({ ...form, format: e.target.value })}><option value="fatura_listesi">Luca Fatura Aktarım (EvrakTarihi;EvrakNo;Açıklama;GenelToplam;Matrah;KDV)</option><option value="csv">Luca Fiş Aktarımı CSV (Fiş No;Fiş Tarihi;Hesap Kodu…)</option><option value="xlsx">Luca Fiş Aktarımı Excel (.xlsx)</option></Select></Field>
             <Field label="Karakter kodlaması"><Select value={form.encoding} disabled={form.format !== "csv"} onChange={(e) => setForm({ ...form, encoding: e.target.value })}><option value="cp1254">Windows-1254 (Türkçe)</option><option value="utf-8-sig">UTF-8</option></Select></Field>
           </div>
           <div className="mt-4 flex items-center gap-3">
@@ -98,7 +105,8 @@ export default function ExportsPage() {
               <tr key={r.id} className="hover:bg-slate-50">
                 <Td>{fmtDateTime(r.created_at)}</Td><Td>{r.taxpayer_title}</Td><Td className="text-right tabular-nums">{r.voucher_count}</Td>
                 <Td className="text-right tabular-nums">{r.file_count}</Td><Td>{r.created_by_name ?? "—"}</Td><Td><StatusBadge status={r.status} /></Td>
-                <Td><Button size="sm" variant="ghost" onClick={() => openExport(r.id)}>Dosyalar</Button></Td>
+                <Td><div className="flex gap-1"><Button size="sm" variant="ghost" onClick={() => openExport(r.id)}>Dosyalar</Button>
+                  <Button size="sm" variant="ghost" onClick={() => downloadAsInvoiceList(r.id)} title="Bu aktarımı Luca Fatura Aktarım biçiminde (EvrakTarihi;EvrakNo;…) indir"><Download className="h-4 w-4" />Fatura Aktarım CSV</Button></div></Td>
               </tr>))}
           </Table>
         )}

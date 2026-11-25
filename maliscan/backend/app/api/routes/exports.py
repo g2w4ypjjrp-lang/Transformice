@@ -6,14 +6,17 @@ import uuid
 from datetime import date
 from typing import Literal
 
-from fastapi import APIRouter, Query
+import io
+import zipfile
+
+from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 
 from app.api.deps import ALL_ROLES, BOOKERS, DB, require_firm_role
 from app.api.errors import ApiError, not_found
 from app.services.luca import ExportOptions, LucaExportService
-from app.services.luca.repository import export_journal_entries
+from app.services.luca.repository import _load_vouchers, export_journal_entries
 from app.services.storage import BucketStorage, StorageError, get_storage
 
 router = APIRouter(prefix="/firms/{firm_id}", tags=["exports"])
@@ -100,3 +103,31 @@ def get_export(firm_id: uuid.UUID, export_id: uuid.UUID, conn: DB) -> dict:
         files.append({"id": f["id"], "file_index": f["file_index"], "filename": name,
                       "voucher_count": f["voucher_count"], "sha256": f["sha256"], "download_url": url})
     return {**dict(job), "verified_template": False, "files": files}
+
+
+@router.get("/exports/{export_id}/download", summary="Download an earlier export again in another format "
+            "(no status change; >400 rows → zip)")
+def download_export_as(firm_id: uuid.UUID, export_id: uuid.UUID, conn: DB,
+                       format: Literal["fatura_listesi", "csv", "xlsx"] = "fatura_listesi") -> Response:
+    require_firm_role(conn, firm_id, ALL_ROLES)
+    job = conn.execute(text("SELECT taxpayer_id FROM public.export_jobs WHERE firm_id = :f AND id = :j"),
+                       {"f": firm_id, "j": export_id}).mappings().one_or_none()
+    if job is None:
+        raise not_found("export")
+    vouchers = [v for v, _ in _load_vouchers(conn, firm_id, job["taxpayer_id"], "export_job_id = :j",
+                                             {"j": export_id}, lock=False)]
+    if not vouchers:
+        raise ApiError(422, "nothing_to_export", "export has no journal entries")
+    files = LucaExportService(options=ExportOptions(fmt=format, encoding="cp1254")).rebuild_files(vouchers)
+    if len(files) == 1:
+        f = files[0]
+        media = "text/csv" if f.filename.endswith(".csv") else \
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        return Response(f.content, media_type=media,
+                        headers={"Content-Disposition": f'attachment; filename="{f.filename}"'})
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in files:
+            z.writestr(f.filename, f.content)
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="luca_{format}_{export_id.hex[:8]}.zip"'})

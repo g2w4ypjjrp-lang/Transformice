@@ -89,6 +89,13 @@ class LucaExportService:
         result.exported_source_ids = [v.source_id for v in ordered]
         return result
 
+    def rebuild_files(self, vouchers: list[Voucher]) -> list[ExportFile]:
+        """Re-create files for vouchers that were already validated and exported (e.g. the same
+        export again in another format). No validation, no state change."""
+        ordered = sorted(vouchers, key=lambda v: (v.voucher_date, v.document_number or "", str(v.source_id)))
+        issues: list[Issue] = []
+        return [self._build_file(i, chunk, issues) for i, chunk in enumerate(self.split(ordered), start=1)]
+
     def split(self, vouchers: list[Voucher]) -> list[list[Voucher]]:
         """Chunks of ≤ max_vouchers_per_file; a voucher is never split across files."""
         size = FATURA_LISTESI_MAX_ROWS if self.options.fmt == "fatura_listesi" else self.template.max_vouchers_per_file
