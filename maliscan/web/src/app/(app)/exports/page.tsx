@@ -1,11 +1,11 @@
 "use client";
 
-import { Download, FileSpreadsheet } from "lucide-react";
+import { Download, FileSpreadsheet, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Button, Card, Empty, Field, Input, PageHeader, Select, Spinner, StatusBadge, Table, Td, Th } from "@/components/ui";
 import { api, ApiError, downloadFile } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
-import { BOOKERS, useSession } from "@/lib/session";
+import { BOOKERS, MANAGERS, useSession } from "@/lib/session";
 import type { Taxpayer } from "@/lib/types";
 
 interface ExportRow { id: string; taxpayer_title: string; template_version: string; status: string; voucher_count: number; file_count: number; created_at: string; created_by_name: string | null }
@@ -61,6 +61,17 @@ export default function ExportsPage() {
     catch (e) { setError(e instanceof ApiError ? e.message : "İndirme başarısız"); }
   }
 
+  async function deleteExport(id: string) {
+    if (!firm) return;
+    if (!window.confirm("Bu aktarım ve indirme dosyaları silinsin mi?\n\nİçindeki fişler tekrar 'Onaylandı' durumuna döner; yeniden aktarabilir veya silebilirsiniz.\nDosyayı Luca'ya yüklediyseniz o fişleri Luca'dan da silin.")) return;
+    setError(null);
+    try {
+      await api(`/firms/${firm.firm_id}/exports/${id}`, { method: "DELETE" });
+      if (result?.id === id) setResult(null);
+      load();
+    } catch (e) { setError(e instanceof ApiError ? e.message : "Silinemedi"); }
+  }
+
   if (!firm || !rows) return <Spinner />;
   return (
     <>
@@ -106,7 +117,8 @@ export default function ExportsPage() {
                 <Td>{fmtDateTime(r.created_at)}</Td><Td>{r.taxpayer_title}</Td><Td className="text-right tabular-nums">{r.voucher_count}</Td>
                 <Td className="text-right tabular-nums">{r.file_count}</Td><Td>{r.created_by_name ?? "—"}</Td><Td><StatusBadge status={r.status} /></Td>
                 <Td><div className="flex gap-1"><Button size="sm" variant="ghost" onClick={() => openExport(r.id)}>Dosyalar</Button>
-                  <Button size="sm" variant="ghost" onClick={() => downloadAsInvoiceList(r.id)} title="Bu aktarımı Luca Fatura Aktarım biçiminde (EvrakTarihi;EvrakNo;…) indir"><Download className="h-4 w-4" />Fatura Aktarım CSV</Button></div></Td>
+                  <Button size="sm" variant="ghost" onClick={() => downloadAsInvoiceList(r.id)} title="Bu aktarımı Luca Fatura Aktarım biçiminde (EvrakTarihi;EvrakNo;…) indir"><Download className="h-4 w-4" />Fatura Aktarım CSV</Button>
+                  {can(...MANAGERS) && <Button size="sm" variant="danger" onClick={() => deleteExport(r.id)}><Trash2 className="h-4 w-4" />Sil</Button>}</div></Td>
               </tr>))}
           </Table>
         )}

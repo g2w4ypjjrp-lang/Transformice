@@ -347,3 +347,30 @@ def test_approved_document_can_be_deleted(client, office, engine):
     with engine.connect() as c:
         st = c.execute(text("SELECT status FROM journal_entries WHERE document_id = :d"), {"d": doc_id}).scalar_one()
     assert st == "rejected"  # withdrawn, so it can never be exported
+
+
+def test_exported_documents_and_exports_can_be_deleted(client, office, engine):
+    f = office["firm"]
+    ids = []
+    for t, (no, day) in ((1, ("F-1", "2026-11-02")), (6, ("F-2", "2026-11-03"))):
+        ids.append(_upload(client, office, thermal_receipt_image(tilt=t)).json()["id"])
+        _work(engine, receipt_payload(document_number=no, document_date=day), firm=f)
+    for d in ids:
+        assert client.post(f"/api/v1/firms/{f}/documents/{d}/approve", headers=office["h"], json={}).status_code == 200
+    exp = client.post(f"/api/v1/firms/{f}/taxpayers/{office['tp']}/exports", headers=office["h"],
+                      json={"all_approved": True})
+    assert exp.status_code == 200, exp.text
+    exp_id = exp.json()["id"]
+    # an exported document can be deleted
+    assert client.delete(f"/api/v1/firms/{f}/documents/{ids[0]}", headers=office["h"]).status_code == 204
+    # only owner/admin may delete an export
+    assert client.delete(f"/api/v1/firms/{f}/exports/{exp_id}", headers=office["clerk"]).status_code == 403
+    assert client.delete(f"/api/v1/firms/{f}/exports/{exp_id}", headers=office["h"]).status_code == 204
+    assert client.get(f"/api/v1/firms/{f}/exports", headers=office["h"]).json() == []
+    doc = client.get(f"/api/v1/firms/{f}/documents/{ids[1]}", headers=office["h"]).json()
+    assert doc["document"]["status"] == "approved" and doc["journal"]["status"] == "approved"
+    # can be exported again
+    again = client.post(f"/api/v1/firms/{f}/taxpayers/{office['tp']}/exports", headers=office["h"],
+                        json={"all_approved": True, "format": "fatura_listesi"})
+    assert again.status_code == 200, again.text
+    assert again.json()["voucher_count"] == 1

@@ -484,7 +484,10 @@ def reprocess(firm_id: uuid.UUID, document_id: uuid.UUID, conn: DB) -> dict:
 
 
 def _withdraw_journals(conn: Connection, firm_id: uuid.UUID, doc_ids: list[uuid.UUID]) -> None:
-    """Approved → draft → rejected (DB state machine); exported entries are never touched."""
+    """(Exported →) approved → draft → rejected (DB state machine). Exported entries are unlinked
+    from their export first — the user deletes the record here and, if it was imported, in Luca."""
+    conn.execute(text("""UPDATE public.journal_entries SET status = 'approved' WHERE firm_id = :f
+                         AND document_id = ANY(:ids) AND status = 'exported'"""), {"f": firm_id, "ids": doc_ids})
     conn.execute(text("""UPDATE public.journal_entries SET status = 'draft' WHERE firm_id = :f
                          AND document_id = ANY(:ids) AND status = 'approved'"""), {"f": firm_id, "ids": doc_ids})
     conn.execute(text("""UPDATE public.journal_entries SET status = 'rejected' WHERE firm_id = :f
@@ -492,12 +495,10 @@ def _withdraw_journals(conn: Connection, firm_id: uuid.UUID, doc_ids: list[uuid.
 
 
 @router.delete("/documents/{document_id}", status_code=204,
-               summary="Delete (soft) a document; approved ones too (journal withdrawn), exported ones are kept")
+               summary="Delete (soft) any document; its journal is withdrawn (also when already exported)")
 def delete_document(firm_id: uuid.UUID, document_id: uuid.UUID, conn: DB) -> Response:
     require_firm_role(conn, firm_id, MANAGERS)
-    d = _doc_row(conn, firm_id, document_id)
-    if d["status"] == "exported":
-        raise ApiError(409, "document_locked", "exported documents are retained (already sent to Luca)")
+    _doc_row(conn, firm_id, document_id)
     _withdraw_journals(conn, firm_id, [document_id])
     conn.execute(text("UPDATE public.documents SET deleted_at = now() WHERE firm_id = :f AND id = :d"),
                  {"f": firm_id, "d": document_id})
@@ -512,20 +513,18 @@ class BulkDeleteIn(BaseModel):
 
 
 @router.post("/documents/bulk-delete",
-             summary="Delete (soft) many documents incl. approved; exported documents are always kept")
+             summary="Delete (soft) many documents, whatever their status")
 def bulk_delete(firm_id: uuid.UUID, body: BulkDeleteIn, conn: DB) -> dict:
     require_firm_role(conn, firm_id, MANAGERS)
     params = {"f": firm_id, "t": body.taxpayer_id, "ids": body.document_ids}
     scope = """firm_id = :f AND deleted_at IS NULL
                AND (CAST(:t AS uuid) IS NULL OR taxpayer_id = :t)
                AND (CAST(:ids AS uuid[]) IS NULL OR id = ANY(:ids))"""
-    kept = conn.execute(text(f"SELECT count(*) FROM public.documents WHERE {scope} "
-                             "AND status = 'exported'"), params).scalar_one()
     ids = [r[0] for r in conn.execute(text(f"""SELECT id FROM public.documents WHERE {scope}
-                                               AND status <> 'exported' FOR UPDATE"""), params)]
+                                               FOR UPDATE"""), params)]
     if ids:
         _withdraw_journals(conn, firm_id, ids)
         conn.execute(text("UPDATE public.documents SET deleted_at = now() WHERE firm_id = :f AND id = ANY(:ids)"),
                      {"f": firm_id, "ids": ids})
         audit(conn, firm_id, "document.bulk_deleted", "document", None, {"count": len(ids)})
-    return {"deleted": len(ids), "kept_locked": kept}
+    return {"deleted": len(ids), "kept_locked": 0}

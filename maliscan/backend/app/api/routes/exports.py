@@ -13,7 +13,8 @@ from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 
-from app.api.deps import ALL_ROLES, BOOKERS, DB, require_firm_role
+from app.api.deps import ALL_ROLES, BOOKERS, DB, MANAGERS, require_firm_role
+from app.api.util import audit
 from app.api.errors import ApiError, not_found
 from app.services.luca import ExportOptions, LucaExportService
 from app.services.luca.repository import _load_vouchers, export_journal_entries
@@ -131,3 +132,32 @@ def download_export_as(firm_id: uuid.UUID, export_id: uuid.UUID, conn: DB,
             z.writestr(f.filename, f.content)
     return Response(buf.getvalue(), media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="luca_{format}_{export_id.hex[:8]}.zip"'})
+
+
+@router.delete("/exports/{export_id}", status_code=204,
+               summary="Delete an export and its files; its entries go back to 'approved' (owner/admin)")
+def delete_export(firm_id: uuid.UUID, export_id: uuid.UUID, conn: DB) -> Response:
+    require_firm_role(conn, firm_id, MANAGERS)
+    files = conn.execute(text("""SELECT storage_bucket, storage_path FROM public.export_files
+                                 WHERE firm_id = :f AND export_job_id = :j"""), {"f": firm_id, "j": export_id}).all()
+    if conn.execute(text("SELECT 1 FROM public.export_jobs WHERE firm_id = :f AND id = :j"),
+                    {"f": firm_id, "j": export_id}).first() is None:
+        raise not_found("export")
+    docs = [r[0] for r in conn.execute(text("""UPDATE public.journal_entries SET status = 'approved'
+                                               WHERE firm_id = :f AND export_job_id = :j AND status = 'exported'
+                                               RETURNING document_id"""), {"f": firm_id, "j": export_id})]
+    # entries withdrawn/deleted meanwhile may still point at the job: unlink them too
+    conn.execute(text("""UPDATE public.journal_entries SET export_job_id = NULL, export_file_id = NULL
+                         WHERE firm_id = :f AND export_job_id = :j AND status <> 'exported'"""),
+                 {"f": firm_id, "j": export_id})
+    conn.execute(text("""UPDATE public.documents SET status = 'approved' WHERE firm_id = :f
+                         AND id = ANY(:ids) AND status = 'exported'"""), {"f": firm_id, "ids": [d for d in docs if d]})
+    conn.execute(text("DELETE FROM public.export_jobs WHERE firm_id = :f AND id = :j"), {"f": firm_id, "j": export_id})
+    audit(conn, firm_id, "export.deleted", "export_job", export_id, {"entries": len(docs)})
+    storage = get_storage()
+    for bucket, path in files:
+        try:
+            storage.delete(bucket, path)
+        except Exception:  # noqa: BLE001 — orphan file is harmless; retention sweeps it
+            pass
+    return Response(status_code=204)

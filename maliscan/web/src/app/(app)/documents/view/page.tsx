@@ -123,8 +123,8 @@ function DocumentReview() {
         <div className="flex flex-wrap gap-2">
           {can(...WRITERS) && ["needs_review", "failed", "rejected"].includes(doc.status) && (
             <Button variant="ghost" size="sm" loading={busy === "re"} onClick={() => run("re", () => api(`${base}/reprocess`, { method: "POST" }))}><RefreshCw className="h-4 w-4" />Yeniden oku</Button>)}
-          {can(...MANAGERS) && doc.status !== "exported" && (
-            <Button variant="ghost" size="sm" onClick={() => confirm(doc.status === "approved" ? "Onaylı belge silinsin mi? Onayı geri alınır ve fiş Luca'ya aktarılmaz." : "Belge silinsin mi?") && run("del", () => api(base, { method: "DELETE" }), () => router.replace("/documents"))}><Trash2 className="h-4 w-4" />Sil</Button>)}
+          {can(...MANAGERS) && (
+            <Button variant="ghost" size="sm" onClick={() => confirm(doc.status === "exported" ? "Luca'ya aktarılmış belge silinsin mi? MaliScan'den silinir; Luca'ya yüklediyseniz Luca'dan da silin." : doc.status === "approved" ? "Onaylı belge silinsin mi? Onayı geri alınır ve fiş Luca'ya aktarılmaz." : "Belge silinsin mi?") && run("del", () => api(base, { method: "DELETE" }), () => router.replace("/documents"))}><Trash2 className="h-4 w-4" />Sil</Button>)}
           {can(...BOOKERS) && ["approved", "rejected"].includes(doc.status) && (
             <Button variant="secondary" size="sm" loading={busy === "reopen"} onClick={() => run("reopen", () => api(`${base}/reopen`, { method: "POST", json: {} }))}><RotateCcw className="h-4 w-4" />Yeniden aç</Button>)}
           {doc.status === "needs_review" && <Button variant="ghost" size="sm" onClick={goNext}>Sonraki<ChevronRight className="h-4 w-4" /></Button>}
