@@ -316,6 +316,42 @@ def update_account(firm_id: uuid.UUID, taxpayer_id: uuid.UUID, account_id: uuid.
     return AccountOut(**row)
 
 
+@router.get("/{taxpayer_id}/accounts/export", summary="Download chart of accounts (Hesap Kodu;Hesap Adı, cp1254 CSV)")
+def export_accounts(firm_id: uuid.UUID, taxpayer_id: uuid.UUID, conn: DB) -> Response:
+    require_firm_role(conn, firm_id, ALL_ROLES)
+    _get_tp(conn, firm_id, taxpayer_id)
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+    w.writerow(["Hesap Kodu", "Hesap Adı"])
+    for code, name in conn.execute(text("""SELECT code, name FROM public.chart_of_accounts
+                                           WHERE firm_id = :f AND taxpayer_id = :t AND is_active
+                                           ORDER BY string_to_array(code, '.')"""), {"f": firm_id, "t": taxpayer_id}):
+        w.writerow([code, name])
+    return Response(buf.getvalue().encode("cp1254", errors="replace"), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="hesap_plani.csv"'})
+
+
+@router.post("/{taxpayer_id}/accounts/copy-to-all",
+             summary="Save this chart to every other active taxpayer of the office (adds/updates, never deletes)")
+def copy_accounts_to_all(firm_id: uuid.UUID, taxpayer_id: uuid.UUID, conn: DB) -> dict:
+    require_firm_role(conn, firm_id, BOOKERS)
+    _get_tp(conn, firm_id, taxpayer_id)
+    rows = [dict(r) for r in conn.execute(text("""SELECT code, name, parent_code, account_class, normal_balance,
+                                                         is_postable FROM public.chart_of_accounts
+                                                    WHERE firm_id = :f AND taxpayer_id = :t AND is_active
+                                                    ORDER BY array_length(string_to_array(code, '.'), 1)"""),
+                                          {"f": firm_id, "t": taxpayer_id}).mappings()]
+    targets = [r[0] for r in conn.execute(text("""SELECT id FROM public.taxpayers WHERE firm_id = :f AND id <> :t
+                                                   AND deleted_at IS NULL"""), {"f": firm_id, "t": taxpayer_id})]
+    for tp in targets:
+        _insert_accounts(conn, firm_id, tp, rows)
+        conn.execute(text("""UPDATE public.chart_of_accounts c SET is_postable = false
+                              WHERE c.taxpayer_id = :t AND EXISTS (SELECT 1 FROM public.chart_of_accounts k
+                                    WHERE k.taxpayer_id = :t AND k.parent_code = c.code)"""), {"t": tp})
+    audit(conn, firm_id, "chart.copied", "taxpayer", taxpayer_id, {"targets": len(targets), "accounts": len(rows)})
+    return {"taxpayers": len(targets), "accounts": len(rows)}
+
+
 @router.post("/{taxpayer_id}/accounts/seed-default", summary="Add the default TDHP accounts (idempotent)")
 def seed_accounts(firm_id: uuid.UUID, taxpayer_id: uuid.UUID, conn: DB) -> dict:
     require_firm_role(conn, firm_id, BOOKERS)

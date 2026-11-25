@@ -1,9 +1,10 @@
 "use client";
 
-import { AlertTriangle, Camera, CheckCircle2, FileUp, Flashlight, Loader2, RefreshCw, Trash2, Zap, ZapOff } from "lucide-react";
+import { AlertTriangle, Camera, Check, CheckCircle2, FileUp, Flashlight, Loader2, RefreshCw, Trash2, XCircle, Zap, ZapOff } from "lucide-react";
 import Link from "next/link";
 import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
-import { upload } from "@/lib/api";
+import { api, upload } from "@/lib/api";
+import { fmtMoney } from "@/lib/format";
 import { Detection, detectDocuments, StabilityTracker } from "@/lib/scanner/detect";
 import { enhance, EnhanceMode, sharpness } from "@/lib/scanner/enhance";
 import { Img, Quad, targetSize, warp } from "@/lib/scanner/geometry";
@@ -21,6 +22,9 @@ interface QueueItem {
   documentId?: string;
   blurry?: boolean;
   source: "camera" | "upload";
+  /** result of server-side reading after upload */
+  read?: "reading" | "ok" | "partial" | "failed";
+  summary?: string;
 }
 
 const DETECT_WIDTH = 320;
@@ -68,10 +72,12 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
   const lastShotRef = useRef(0);
 
   const [camera, setCamera] = useState<"idle" | "starting" | "on" | "unsupported" | "denied">("idle");
-  // Off by default: people press the shutter themselves; auto + manual produced extra photos.
-  const [auto, setAutoState] = useState(false);
+  // On by default: hold the receipt in view and it is captured and read without pressing anything
+  // (one photo per receipt — see StabilityTracker). Choice is remembered.
+  const [auto, setAutoState] = useState(true);
+  const [okFlash, setOkFlash] = useState<string | null>(null);
   useEffect(() => {
-    try { if (localStorage.getItem("maliscan.autoCapture") === "1") setAutoState(true); } catch { /* private mode */ }
+    try { if (localStorage.getItem("maliscan.autoCapture") === "0") setAutoState(false); } catch { /* private mode */ }
   }, []);
   const setAuto = (v: boolean) => {
     setAutoState(v);
@@ -113,7 +119,7 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
       const track = stream.getVideoTracks()[0];
       const caps = (track.getCapabilities?.() ?? {}) as { torch?: boolean };
       setTorch(caps.torch ? false : null);
-      trackerRef.current = new StabilityTracker(Math.hypot(DETECT_WIDTH, DETECT_WIDTH * 0.75), 10);
+      trackerRef.current = new StabilityTracker(Math.hypot(DETECT_WIDTH, DETECT_WIDTH * 0.75), 8);
       setCamera("on");
     } catch (e) {
       setCamera((e as DOMException)?.name === "NotAllowedError" ? "denied" : "unsupported");
@@ -244,9 +250,35 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
     form.append("capture_metadata", JSON.stringify({ scanner: "maliscan-web", mode, blurry: !!next.blurry }));
     upload<{ id: string }>(`/firms/${firmId}/taxpayers/${taxpayerId}/documents`, form, (p) =>
       setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, progress: p } : it))))
-      .then((doc) => setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, status: "done", documentId: doc.id } : it))))
+      .then((doc) => setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, status: "done", documentId: doc.id, read: "reading" } : it))))
       .catch((err) => setQueue((q) => q.map((it) => (it.id === next.id ? { ...it, status: "error", error: err.message } : it))));
   }, [queue, taxpayerId, firmId, mode]);
+
+  // ---------------------------------------------------------------- reading result (✓ when the receipt was read)
+  useEffect(() => {
+    const waiting = queue.filter((q) => q.status === "done" && q.read === "reading" && q.documentId);
+    if (!waiting.length) return;
+    const t = setTimeout(async () => {
+      for (const it of waiting) {
+        try {
+          const d = await api<{ document: { status: string; total_amount: string | null; document_date: string | null } }>(
+            `/firms/${firmId}/documents/${it.documentId}`);
+          const st = d.document.status;
+          if (["queued", "processing", "uploaded"].includes(st)) continue;
+          const ok = st !== "failed" && !!d.document.total_amount && !!d.document.document_date;
+          const read: QueueItem["read"] = st === "failed" ? "failed" : ok ? "ok" : "partial";
+          const summary = d.document.total_amount ? fmtMoney(d.document.total_amount) : undefined;
+          setQueue((q) => q.map((x) => (x.id === it.id ? { ...x, read, summary } : x)));
+          if (read === "ok") {
+            setOkFlash(summary ?? "Okundu");
+            navigator.vibrate?.([30, 60, 30]);
+            setTimeout(() => setOkFlash(null), 1800);
+          }
+        } catch { /* try again next tick */ }
+      }
+    }, 3000);
+    return () => clearTimeout(t);
+  }, [queue, firmId]);
 
   const retry = (id: string) => setQueue((q) => q.map((it) => (it.id === id ? { ...it, status: "pending", error: undefined, progress: 0 } : it)));
   const remove = (id: string) => setQueue((q) => q.filter((it) => it.id !== id || it.status === "uploading"));
@@ -260,10 +292,15 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
           <video ref={videoRef} playsInline muted className={cn("h-full w-full object-cover", camera !== "on" && "hidden")} />
           <canvas ref={overlayRef} className="pointer-events-none absolute inset-0 h-full w-full" />
           {flash && <div className="absolute inset-0 bg-white/70" />}
+          {okFlash && (
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2">
+              <div className="grid h-24 w-24 place-items-center rounded-full bg-accent-500 text-white shadow-lg"><Check className="h-14 w-14" strokeWidth={3} /></div>
+              <span className="rounded-full bg-black/60 px-3 py-1 text-sm font-medium text-white">Fiş okundu · {okFlash}</span>
+            </div>)}
           {camera !== "on" && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6 text-center text-white">
               {camera === "starting" ? <Loader2 className="h-8 w-8 animate-spin" /> : <Camera className="h-10 w-10 opacity-80" />}
-              {camera === "idle" && <><p className="text-sm opacity-80">Fişi koyu bir zemine koyun ve kamerayı başlatın. Belge sabit durduğunda otomatik çekilir.</p>
+              {camera === "idle" && <><p className="text-sm opacity-80">Fişi koyu bir zemine koyun ve kamerayı başlatın. Tuşa basmanız gerekmez: fiş sabit durunca otomatik çekilir, okunur ve ✓ işareti çıkar. Sonra sıradaki fişi koyun.</p>
                 <Button onClick={start} disabled={!taxpayerId}>Kamerayı başlat</Button>
                 {!taxpayerId && <p className="text-xs text-amber-300">Önce mükellef seçin.</p>}</>}
               {camera === "denied" && <p className="text-sm">Kamera izni reddedildi. Tarayıcı ayarlarından izin verin veya aşağıdan dosya yükleyin.</p>}
@@ -309,14 +346,14 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
               <option value="bw">Siyah-beyaz (soluk fişler)</option>
             </Select>
           </div>
-          <span className="text-sm text-ink-500">{auto ? "Otomatik çekim açık" : "Otomatik çekim kapalı"}</span>
+          <span className="text-sm text-ink-500">{auto ? "Otomatik çekim açık — tuşa basmadan okur (⚡ ile kapatın)" : "Otomatik çekim kapalı — çekmek için tuşa basın"}</span>
         </div>
       </div>
 
       <aside className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold">Yükleme kuyruğu</h2>
-          <span className="text-xs text-ink-500">{done}/{queue.length} yüklendi</span>
+          <span className="text-xs text-ink-500">{queue.filter((q) => q.read === "ok").length} okundu · {done}/{queue.length} yüklendi</span>
         </div>
         {queue.length === 0 && <p className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-ink-500">Çekilen belgeler burada görünür ve otomatik yüklenir. Aynı karede birden fazla fiş varsa her biri ayrı kırpılır.</p>}
         <ul className="space-y-2">
@@ -328,7 +365,13 @@ export function Scanner({ firmId, taxpayerId }: { firmId: string; taxpayerId: st
                 <p className="truncate text-xs font-medium">{it.name}</p>
                 {it.status === "uploading" && <div className="mt-1 h-1 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-brand-500" style={{ width: `${it.progress * 100}%` }} /></div>}
                 {it.status === "pending" && <p className="text-xs text-ink-500">{taxpayerId ? "Sırada" : "Mükellef seçin"}</p>}
-                {it.status === "done" && <Link href={`/documents/view?id=${it.documentId}`} className="inline-flex items-center gap-1 text-xs text-accent-700 hover:underline"><CheckCircle2 className="h-3 w-3" />Yüklendi — işleniyor</Link>}
+                {it.status === "done" && <Link href={`/documents/view?id=${it.documentId}`} className={cn("inline-flex items-center gap-1 text-xs hover:underline",
+                  it.read === "failed" ? "text-red-600" : it.read === "partial" ? "text-amber-700" : "text-accent-700")}>
+                  {it.read === "reading" ? <><Loader2 className="h-3 w-3 animate-spin" />Okunuyor…</>
+                    : it.read === "ok" ? <><CheckCircle2 className="h-3 w-3" />Okundu ✓ {it.summary}</>
+                    : it.read === "partial" ? <><AlertTriangle className="h-3 w-3" />Kısmen okundu — kontrol edin</>
+                    : it.read === "failed" ? <><XCircle className="h-3 w-3" />Okunamadı — elle girin</>
+                    : <><CheckCircle2 className="h-3 w-3" />Yüklendi</>}</Link>}
                 {it.status === "error" && <p className="text-xs text-red-600">{it.error}</p>}
                 {it.blurry && it.status !== "error" && <p className="inline-flex items-center gap-1 text-xs text-amber-700"><AlertTriangle className="h-3 w-3" />Görüntü bulanık olabilir</p>}
               </div>

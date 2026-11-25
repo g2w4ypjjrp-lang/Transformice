@@ -72,12 +72,12 @@ function DocumentsInner() {
     if (!firm) return;
     const tp = taxpayers.find((t) => t.id === taxpayer);
     const scope = tp ? `"${tp.title}" mükellefinin` : "TÜM mükelleflerin";
-    if (!window.confirm(`${scope} bütün belgeleri silinsin mi?\n\nOnaylanmış ve Luca'ya aktarılmış belgeler yasal kayıt olduğu için silinmez. Bu işlem geri alınamaz.`)) return;
+    if (!window.confirm(`${scope} bütün belgeleri silinsin mi?\n\nOnaylanmış belgeler de silinir (onayları geri alınır). Luca'ya aktarılmış belgeler silinmez. Bu işlem geri alınamaz.`)) return;
     setBusy(true);
     try {
       const r = await api<{ deleted: number; kept_locked: number }>(`/firms/${firm.firm_id}/documents/bulk-delete`,
         { method: "POST", json: { taxpayer_id: taxpayer || null } });
-      setMessage(`${r.deleted} belge silindi.${r.kept_locked ? ` ${r.kept_locked} onaylı/aktarılmış belge korundu (silmek için önce onayı geri alın).` : ""}`);
+      setMessage(`${r.deleted} belge silindi.${r.kept_locked ? ` ${r.kept_locked} Luca'ya aktarılmış belge korundu.` : ""}`);
       load();
     } catch (e) {
       setMessage(e instanceof ApiError ? e.message : "Silme başarısız");

@@ -336,3 +336,14 @@ def test_bulk_delete_all_documents(client, office, engine):
     listed = client.get(f"/api/v1/firms/{office['firm']}/documents", headers=office["h"]).json()
     assert listed["total"] == 0
     assert _work(engine, firm=office["firm"]) == ["skipped", "skipped"]
+
+
+def test_approved_document_can_be_deleted(client, office, engine):
+    doc_id = _upload(client, office, thermal_receipt_image(tilt=4)).json()["id"]
+    assert _work(engine, firm=office["firm"]) == ["succeeded"]
+    base = f"/api/v1/firms/{office['firm']}/documents/{doc_id}"
+    assert client.post(f"{base}/approve", headers=office["h"], json={}).status_code == 200
+    assert client.delete(base, headers=office["h"]).status_code == 204
+    with engine.connect() as c:
+        st = c.execute(text("SELECT status FROM journal_entries WHERE document_id = :d"), {"d": doc_id}).scalar_one()
+    assert st == "rejected"  # withdrawn, so it can never be exported

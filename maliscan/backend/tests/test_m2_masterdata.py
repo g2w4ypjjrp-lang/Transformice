@@ -89,6 +89,20 @@ class TestChart:
         acc = {a["code"]: a for a in client.get(base, headers=office["h"]).json()}
         assert acc["770"]["is_postable"] is False and acc["770.01"]["is_postable"] is False
 
+    def test_save_chart_download_and_copy_to_all(self, client, office):
+        src = _tp(client, office, seed_default_chart=False).json()
+        other = _tp(client, office, seed_default_chart=False).json()
+        base = f"/api/v1/firms/{office['firm']}/taxpayers"
+        client.post(f"{base}/{src['id']}/accounts", headers=office["h"], json={"code": "770.01.003", "name": "Akaryakıt"})
+        dl = client.get(f"{base}/{src['id']}/accounts/export", headers=office["h"])
+        assert dl.status_code == 200 and "hesap_plani.csv" in dl.headers["content-disposition"]
+        lines = dl.content.decode("cp1254").split("\r\n")
+        assert lines[0] == "Hesap Kodu;Hesap Adı" and "770.01.003;Akaryakıt" in lines
+        r = client.post(f"{base}/{src['id']}/accounts/copy-to-all", headers=office["h"])
+        assert r.status_code == 200 and r.json() == {"taxpayers": 1, "accounts": 3}
+        acc = {a["code"]: a for a in client.get(f"{base}/{other['id']}/accounts", headers=office["h"]).json()}
+        assert acc["770.01.003"]["is_postable"] and not acc["770.01"]["is_postable"] and not acc["770"]["is_postable"]
+
     def test_import_luca_style_csv(self, client, office):
         tp = _tp(client, office, seed_default_chart=False).json()
         csv_bytes = "Hesap Kodu;Hesap Adı\r\n100;KASA\r\n100.01;MERKEZ KASA\r\n320.01.001;ABC GIDA LTD\r\nXX;bad\r\n" \

@@ -1,11 +1,11 @@
 "use client";
 
-import { ArrowLeft, Plus, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, Download, Plus, Save, Trash2, Upload } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { ChangeEvent, Suspense, useCallback, useEffect, useState } from "react";
 import { Alert, Badge, Button, Card, Field, Input, Modal, PageHeader, Select, Spinner, Table, Td, Th, cn } from "@/components/ui";
-import { api, ApiError, upload } from "@/lib/api";
+import { api, ApiError, downloadFile, upload } from "@/lib/api";
 import { BOOKERS, MANAGERS, useSession } from "@/lib/session";
 import type { Account, Taxpayer } from "@/lib/types";
 
@@ -105,7 +105,11 @@ function TaxpayerInner() {
       {tab === "accounts" && (
         <Card title="Hesap planı" actions={editable && <>
           <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:bg-slate-50"><Upload className="h-4 w-4" />Luca/Excel içe aktar<input type="file" accept=".csv,.xlsx,.txt" className="hidden" onChange={onImport} /></label>
-          <Button size="sm" variant="secondary" onClick={() => act(() => api(`${base}/accounts/seed-default`, { method: "POST" }), "Standart hesaplar eklendi.")}>TDHP ekle</Button></>}>
+          <Button size="sm" variant="secondary" onClick={() => act(() => api(`${base}/accounts/seed-default`, { method: "POST" }), "Standart hesaplar eklendi.")}>TDHP ekle</Button>
+          <Button size="sm" variant="secondary" onClick={() => act(() => downloadFile(`${base}/accounts/export`), "Hesap planı bilgisayarınıza kaydedildi (hesap_plani.csv).")}><Download className="h-4 w-4" />Hesap planını indir</Button>
+          <Button size="sm" onClick={() => confirm("Bu hesap planı büronuzdaki TÜM mükelleflere kaydedilsin mi?\n\nEksik hesaplar eklenir, aynı kodlu hesapların adı güncellenir; hiçbir hesap silinmez.") &&
+            act(async () => { const r = await api<{ taxpayers: number; accounts: number }>(`${base}/accounts/copy-to-all`, { method: "POST" }); return r; },
+              "Hesap planı tüm mükelleflere kaydedildi.")}><Save className="h-4 w-4" />Tüm mükelleflere kaydet</Button></>}>
           {editable && (
             <form className="mb-4 flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); act(() => api(`${base}/accounts`, { method: "POST", json: newAcc }), "Hesap eklendi.").then(() => setNewAcc({ code: "", name: "" })); }}>
               <Input required placeholder="770.01.005" value={newAcc.code} onChange={(e) => setNewAcc({ ...newAcc, code: e.target.value.trim() })} className="w-40 font-mono" />

@@ -483,14 +483,22 @@ def reprocess(firm_id: uuid.UUID, document_id: uuid.UUID, conn: DB) -> dict:
     return {"status": "queued"}
 
 
-@router.delete("/documents/{document_id}", status_code=204, summary="Delete (soft) a document not yet approved")
+def _withdraw_journals(conn: Connection, firm_id: uuid.UUID, doc_ids: list[uuid.UUID]) -> None:
+    """Approved → draft → rejected (DB state machine); exported entries are never touched."""
+    conn.execute(text("""UPDATE public.journal_entries SET status = 'draft' WHERE firm_id = :f
+                         AND document_id = ANY(:ids) AND status = 'approved'"""), {"f": firm_id, "ids": doc_ids})
+    conn.execute(text("""UPDATE public.journal_entries SET status = 'rejected' WHERE firm_id = :f
+                         AND document_id = ANY(:ids) AND status = 'draft'"""), {"f": firm_id, "ids": doc_ids})
+
+
+@router.delete("/documents/{document_id}", status_code=204,
+               summary="Delete (soft) a document; approved ones too (journal withdrawn), exported ones are kept")
 def delete_document(firm_id: uuid.UUID, document_id: uuid.UUID, conn: DB) -> Response:
     require_firm_role(conn, firm_id, MANAGERS)
     d = _doc_row(conn, firm_id, document_id)
-    if d["status"] in ("approved", "exported"):
-        raise ApiError(409, "document_locked", "approved/exported documents are retained")
-    conn.execute(text("""UPDATE public.journal_entries SET status = 'rejected' WHERE firm_id = :f AND document_id = :d
-                         AND status = 'draft'"""), {"f": firm_id, "d": document_id})
+    if d["status"] == "exported":
+        raise ApiError(409, "document_locked", "exported documents are retained (already sent to Luca)")
+    _withdraw_journals(conn, firm_id, [document_id])
     conn.execute(text("UPDATE public.documents SET deleted_at = now() WHERE firm_id = :f AND id = :d"),
                  {"f": firm_id, "d": document_id})
     audit(conn, firm_id, "document.deleted", "document", document_id)
@@ -504,7 +512,7 @@ class BulkDeleteIn(BaseModel):
 
 
 @router.post("/documents/bulk-delete",
-             summary="Delete (soft) many documents; approved/exported documents are always kept")
+             summary="Delete (soft) many documents incl. approved; exported documents are always kept")
 def bulk_delete(firm_id: uuid.UUID, body: BulkDeleteIn, conn: DB) -> dict:
     require_firm_role(conn, firm_id, MANAGERS)
     params = {"f": firm_id, "t": body.taxpayer_id, "ids": body.document_ids}
@@ -512,12 +520,11 @@ def bulk_delete(firm_id: uuid.UUID, body: BulkDeleteIn, conn: DB) -> dict:
                AND (CAST(:t AS uuid) IS NULL OR taxpayer_id = :t)
                AND (CAST(:ids AS uuid[]) IS NULL OR id = ANY(:ids))"""
     kept = conn.execute(text(f"SELECT count(*) FROM public.documents WHERE {scope} "
-                             "AND status IN ('approved','exported')"), params).scalar_one()
+                             "AND status = 'exported'"), params).scalar_one()
     ids = [r[0] for r in conn.execute(text(f"""SELECT id FROM public.documents WHERE {scope}
-                                               AND status NOT IN ('approved','exported') FOR UPDATE"""), params)]
+                                               AND status <> 'exported' FOR UPDATE"""), params)]
     if ids:
-        conn.execute(text("""UPDATE public.journal_entries SET status = 'rejected' WHERE firm_id = :f
-                             AND document_id = ANY(:ids) AND status = 'draft'"""), {"f": firm_id, "ids": ids})
+        _withdraw_journals(conn, firm_id, ids)
         conn.execute(text("UPDATE public.documents SET deleted_at = now() WHERE firm_id = :f AND id = ANY(:ids)"),
                      {"f": firm_id, "ids": ids})
         audit(conn, firm_id, "document.bulk_deleted", "document", None, {"count": len(ids)})

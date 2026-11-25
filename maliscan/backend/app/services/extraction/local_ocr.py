@@ -17,6 +17,7 @@ from pathlib import Path
 
 from PIL import Image, ImageFilter, ImageOps
 
+GOOD_ENOUGH = 10.0  # total+date+VAT consistent (9) + supplier name or VKN; max score is 12
 TARGET_WIDTH = 1700  # enough for receipt fonts; keeps OCR fast on small free-tier CPUs
 
 
@@ -99,7 +100,9 @@ def ocr_variants(content: bytes, *, timeout: int = 90):
 
 def ocr_image(content: bytes, *, timeout: int = 90) -> str:
     """OCR the image under every variant and return the text whose parse is the most
-    complete and arithmetically consistent (stops early on a perfect result)."""
+    complete and arithmetically consistent. Stops at the first variant that already has total,
+    date, a VAT breakdown matching the total and the supplier — usually the first one, so a
+    receipt costs one tesseract run instead of six."""
     from app.services.extraction.receipt_parser import parse_text, score
 
     best: tuple[float, str] | None = None
@@ -108,7 +111,7 @@ def ocr_image(content: bytes, *, timeout: int = 90) -> str:
         sc = score(doc, notes)
         if best is None or sc > best[0]:
             best = (sc, text)
-        if sc >= 12:
+        if sc >= GOOD_ENOUGH:
             break
     return best[1] if best else ""
 
