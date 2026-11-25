@@ -264,3 +264,20 @@ def test_platform_config_hidden_from_regular_users(make_user, as_user):
     uid = make_user()
     with as_user(uid) as conn:
         assert conn.execute(text("SELECT count(*) FROM public.platform_config")).scalar_one() == 0
+
+
+def test_firm_and_user_can_be_deleted_but_audit_stays_immutable(make_user, make_firm, make_taxpayer, owner_conn):
+    """Office termination / KVKK erasure must work despite the append-only audit log."""
+    uid = make_user()
+    firm = make_firm(uid)
+    make_taxpayer(firm)
+    before = owner_conn.execute("SELECT count(*) FROM audit_logs WHERE firm_id = %s", (firm,)).fetchone()[0]
+    assert before >= 1
+    owner_conn.execute("DELETE FROM public.firms WHERE id = %s", (firm,))
+    owner_conn.execute("DELETE FROM auth.users WHERE id = %s", (uid,))
+    assert owner_conn.execute("SELECT count(*) FROM public.users WHERE id = %s", (uid,)).fetchone()[0] == 0
+    # audit rows survive, detached from the deleted firm/user
+    assert owner_conn.execute("SELECT count(*) FROM audit_logs WHERE firm_id IS NULL AND action = 'firm.created' "
+                              "AND actor_user_id IS NULL").fetchone()[0] >= 1
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        owner_conn.execute("DELETE FROM audit_logs WHERE action = 'firm.created'")

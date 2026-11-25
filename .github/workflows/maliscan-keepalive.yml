@@ -1,0 +1,15 @@
+# Keeps the free Supabase project from pausing (it pauses after ~1 week without
+# activity) by calling the API readiness probe, which queries the database.
+# Runs 4×/day: ~120 Actions minutes per month.
+name: MaliScan keep-alive
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+permissions: {}
+jobs:
+  ping:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: curl -fsS --retry 5 --retry-delay 20 --max-time 120 https://maliscan-api.onrender.com/api/v1/health/ready
